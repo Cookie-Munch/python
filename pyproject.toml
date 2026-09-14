@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cookiemunch"
+version = "0.1.0"
+description = "Typed Python client for the Cookie Munch Developer API (a self-hosted Consent Management Platform)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Cookie Munch" }]
+keywords = ["consent", "cmp", "gdpr", "ccpa", "cookiebot", "privacy", "tcf"]
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://cookiemunch.net"
+Source = "https://github.com/Cookie-Munch/python"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cookiemunch*"]
+
+[tool.setuptools.package-data]
+cookiemunch = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
