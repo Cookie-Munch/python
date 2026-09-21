@@ -1,6 +1,6 @@
 # cookiemunch — Python SDK
 
-A small, typed Python client for the **Cookie Munch Developer API** — the self-hosted
+A small, typed Python client for the **Cookie Munch Developer API** — the
 Consent Management Platform (a Cookiebot / CookieYes alternative). It mirrors the
 official TypeScript SDK (`@cookiemunch/sdk`): construct it with an API key and the org
 is derived server-side, so you never pass an `orgId`.

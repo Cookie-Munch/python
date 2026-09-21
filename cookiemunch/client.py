@@ -942,6 +942,13 @@ class _Assets(_Resource):
         its public URL. Requires sites:write."""
         return self._c.request("POST", "/assets", body={"data": data, "contentType": content_type})
 
+    def delete(self, url_or_file_name: str) -> None:
+        """Delete a stored image. Takes the URL ``upload`` returned, or just its file
+        name. Only your own org's images are reachable: the folder comes from your API
+        key, not from the name you send."""
+        name = url_or_file_name.rsplit("/", 1)[-1]
+        self._c.request("DELETE", f"/assets/{_e(name)}")
+
 
 class _Reseller(_Resource):
     """Provision and manage child orgs. Needs a key with the ``reseller:*`` scopes."""
