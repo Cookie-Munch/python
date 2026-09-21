@@ -175,6 +175,14 @@ class CookieMunch:
         """GET /v1/me — identity for SDK bootstrapping."""
         return t.from_dict(t.Identity, self._get("/me"))
 
+    def languages(self) -> List[t.SupportedLanguage]:
+        """GET /v1/languages — the languages the banner already speaks.
+
+        Diff this against your visitors' locales to see which ones you still have to
+        write copy for in ``banner.i18n``.
+        """
+        return [t.from_dict(t.SupportedLanguage, r) for r in self._get("/languages")]
+
     def usage(self) -> t.Usage:
         """GET /v1/usage — current resource usage for the org."""
         return t.from_dict(t.Usage, self._get("/usage"))
@@ -310,6 +318,13 @@ class _Sites(_Resource):
         CSP or Trusted Types policy refused it, so nobody there can be asked. An empty
         list is the healthy answer."""
         return self._c._get(f"/sites/{_e(cbid)}/blocked")
+
+    def import_declaration(self, cbid: str, data: str) -> _JSONDict:
+        """Read a cookie declaration exported from another CMP and translate its
+        categories into ours. Nothing is applied: their vocabulary is not ours, and a
+        cookie in the wrong category is a tag firing against a refusal, so the result
+        comes back for review."""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/import", body={"data": data})
 
     def policy(
         self,

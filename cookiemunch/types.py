@@ -93,6 +93,17 @@ class Identity:
 
 
 @dataclass
+class SupportedLanguage:
+    """A language the banner already has copy for."""
+
+    code: Optional[str] = None
+    name: Optional[str] = None
+    endonym: Optional[str] = None
+    rtl: Optional[bool] = None
+    source: Optional[str] = None
+
+
+@dataclass
 class Site:
     cbid: Optional[str] = None
     org_id: Optional[str] = None
