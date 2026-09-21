@@ -38,6 +38,7 @@ __all__ = [
     "PreferenceItem",
     "BannerSummary",
     "BannerRecord",
+    "Org",
     "from_dict",
     "from_list",
 ]
@@ -301,3 +302,13 @@ class BannerRecord:
     json: Dict[str, Any] = field(default_factory=dict)
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
+
+
+@dataclass
+class Org:
+    """The key's organisation. Returned by ``org.get()`` / ``org.update()``."""
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    plan: Optional[str] = None
+    logo_url: Optional[str] = None

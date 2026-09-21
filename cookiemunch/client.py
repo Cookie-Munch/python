@@ -30,6 +30,10 @@ _JSONDict = Dict[str, Any]
 _ChoicesLike = Union[t.ConsentChoices, Mapping[str, bool]]
 
 
+_UNSET: Any = object()
+"""Sentinel: distinguishes 'clear this field' (None) from 'leave it alone'."""
+
+
 def _qs(params: Optional[Mapping[str, Any]]) -> str:
     if not params:
         return ""
@@ -81,6 +85,20 @@ class CookieMunch:
         self.keys = _Keys(self)
         self.webhooks = _Webhooks(self)
         self.banners = _Banners(self)
+        # The privacy platform beyond the banner.
+        self.identity = _Identity(self)
+        self.vault = _Vault(self)
+        self.profile = _Profile(self)
+        self.subscriptions = _Subscriptions(self)
+        self.assessments = _Assessments(self)
+        self.discovery = _Discovery(self)
+        self.ai = _Ai(self)
+        self.fulfillment = _Fulfillment(self)
+        self.regulatory = _Regulatory(self)
+        self.reseller = _Reseller(self)
+        self.subjects = _Subjects(self)
+        self.org = _Org(self)
+        self.assets = _Assets(self)
 
     # -- transport ---------------------------------------------------------
 
@@ -160,6 +178,11 @@ class CookieMunch:
     def usage(self) -> t.Usage:
         """GET /v1/usage — current resource usage for the org."""
         return t.from_dict(t.Usage, self._get("/usage"))
+
+    def audit(self, limit: Optional[int] = None) -> _JSONDict:
+        """GET /v1/audit — the org's audit log, newest first. API actions appear as
+        ``apikey:<prefix>``. Requires an unscoped key that is not property-locked."""
+        return self._get(f"/audit{_qs({'limit': limit})}")
 
     # -- public consent ingest --------------------------------------------
 
@@ -278,6 +301,60 @@ class _Sites(_Resource):
     def ab(self, cbid: str) -> List[t.AbResult]:
         return t.from_list(t.AbResult, self._c._get(f"/sites/{_e(cbid)}/ab"))
 
+    def banner(self, cbid: str) -> _JSONDict:
+        """Which banner design the site uses: ``{"bannerId": str | None}``."""
+        return self._c._get(f"/sites/{_e(cbid)}/banner")
+
+    def policy(
+        self,
+        cbid: str,
+        *,
+        contact_email: Optional[str] = None,
+        effective_date: Optional[str] = None,
+        jurisdictions: Optional[List[str]] = None,
+    ) -> str:
+        """The site's privacy and cookie policy, as Markdown."""
+        query = _qs(
+            {
+                "contactEmail": contact_email,
+                "effectiveDate": effective_date,
+                "jurisdictions": ",".join(jurisdictions) if jurisdictions else None,
+            }
+        )
+        return self._c.request("GET", f"/sites/{_e(cbid)}/policy{query}", raw=True)
+
+    def set_ad_personalization(
+        self, cbid: str, *, enabled: bool, default: Optional[bool] = None, label: Optional[str] = None
+    ) -> _JSONDict:
+        """Add or remove the separate personalised-ads choice on the site's banner."""
+        body: _JSONDict = {"enabled": enabled}
+        if default is not None:
+            body["default"] = default
+        if label is not None:
+            body["label"] = label
+        return self._c.request("POST", f"/sites/{_e(cbid)}/elements/ad-personalization", body=body)
+
+    def analyze_session(
+        self,
+        cbid: str,
+        *,
+        har: Any = None,
+        requests: Optional[List[Any]] = None,
+        consent: Optional[Mapping[str, bool]] = None,
+        gpc: Optional[bool] = None,
+    ) -> _JSONDict:
+        """Which trackers fired after opt-out in a captured session, and what personal data left the page."""
+        body: _JSONDict = {}
+        if har is not None:
+            body["har"] = har
+        if requests is not None:
+            body["requests"] = list(requests)
+        if consent is not None:
+            body["consent"] = dict(consent)
+        if gpc is not None:
+            body["gpc"] = gpc
+        return self._c.request("POST", f"/sites/{_e(cbid)}/sentry", body=body)
+
     def snippet(
         self,
         cbid: str,
@@ -293,6 +370,14 @@ class _Sites(_Resource):
             t.VerifyResult,
             self._c.request("POST", f"/sites/{_e(cbid)}/verify", body={"method": method}),
         )
+
+    def verify_challenge(self, cbid: str) -> _JSONDict:
+        """Exactly what to publish to prove control of the domain, for each method."""
+        return self._c._get(f"/sites/{_e(cbid)}/verify/challenge")
+
+    def create_bulk(self, sites: List[Mapping[str, Any]]) -> _JSONDict:
+        """Create up to 100 sites. Partial success: each item reports ``ok`` or its own error."""
+        return self._c.request("POST", "/sites/bulk", body={"sites": [dict(x) for x in sites]})
 
     def brand(self, cbid: str) -> _JSONDict:
         return self._c.request("POST", f"/sites/{_e(cbid)}/brand", body={})
@@ -369,6 +454,22 @@ class _Dsar(_Resource):
     def advance(self, id: str, to_status: str) -> _JSONDict:
         return self._c.request("POST", f"/dsar/{_e(id)}/advance", body={"toStatus": to_status})
 
+    def response(self, id: str) -> str:
+        """The subject-facing response notice for a request, as plain text."""
+        return self._c.request("GET", f"/dsar/{_e(id)}/response", raw=True)
+
+    def erase(self, id: str, cbid: str, stamp: str) -> _JSONDict:
+        """Crypto-erase a subject's consent records on a site, for a deletion request.
+        The request must be past identity verification. Requires dsar:write and
+        consent:write."""
+        return self._c.request("POST", f"/dsar/{_e(id)}/erase", body={"cbid": cbid, "stamp": stamp})
+
+    def export(self, id: str, cbid: str, stamp: str) -> _JSONDict:
+        """Return a subject's consent records on a site, for an access or portability
+        request. The request must be past identity verification. Requires dsar:write
+        and consent:read."""
+        return self._c.request("POST", f"/dsar/{_e(id)}/export", body={"cbid": cbid, "stamp": stamp})
+
 
 class _Vendors(_Resource):
     def list(self) -> List[t.ScoredVendor]:
@@ -384,6 +485,10 @@ class _Ropa(_Resource):
 
     def create(self, entry: Mapping[str, Any]) -> _JSONDict:
         return self._c.request("POST", "/ropa", body=dict(entry))
+
+    def export_csv(self) -> str:
+        """The org's RoPA (GDPR Art. 30), as CSV."""
+        return self._c.request("GET", "/ropa/export.csv", raw=True)
 
 
 class _BrandKits(_Resource):
@@ -406,6 +511,11 @@ class _Preferences(_Resource):
             "POST", "/preferences", body={"subjectId": subject_id, "purposes": dict(purposes)}
         )
 
+    def get(self, subject_id: str) -> _JSONDict:
+        """One subject's preference record. A subject with none has empty ``purposes``.
+        Requires consent:read."""
+        return self._c._get(f"/preferences/{_e(subject_id)}")
+
 
 class _Members(_Resource):
     def list(self) -> List[t.Member]:
@@ -425,11 +535,57 @@ class _Keys(_Resource):
     def list(self) -> List[t.ApiKey]:
         return t.from_list(t.ApiKey, self._c._get("/keys"))
 
-    def issue(self, *, name: Optional[str] = None) -> t.ApiKey:
+    def issue(
+        self,
+        *,
+        name: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        cbids: Optional[List[str]] = None,
+        expires_in_days: Optional[int] = None,
+    ) -> t.ApiKey:
+        """Issue an API key; the secret is returned once.
+
+        Pass ``scopes`` and/or ``cbids`` for a least-privilege key — omit both for full
+        access to the whole org. A key locked with ``cbids`` works only on those sites and
+        on no org-wide endpoint.
+        """
         body: _JSONDict = {}
         if name is not None:
             body["name"] = name
+        if scopes is not None:
+            body["scopes"] = list(scopes)
+        if cbids is not None:
+            body["cbids"] = list(cbids)
+        if expires_in_days is not None:
+            body["expiresInDays"] = expires_in_days
         return t.from_dict(t.ApiKey, self._c.request("POST", "/keys", body=body))
+
+    def revoke(self, prefix: str) -> None:
+        """Revoke a key by its prefix. Immediate."""
+        self._c.request("DELETE", f"/keys/{_e(prefix)}")
+
+    def roll(self, prefix: str) -> t.ApiKey:
+        """Rotate a key: a new secret, returned once, with the same scopes, lock and
+        expiry. The old one stops working."""
+        return t.from_dict(t.ApiKey, self._c.request("POST", f"/keys/{_e(prefix)}/roll"))
+
+    def update(
+        self,
+        prefix: str,
+        *,
+        name: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        cbids: Optional[List[str]] = None,
+    ) -> _JSONDict:
+        """Rename a key, or replace its scopes or property lock. Only the fields sent change."""
+        body: _JSONDict = {}
+        if name is not None:
+            body["name"] = name
+        if scopes is not None:
+            body["scopes"] = list(scopes)
+        if cbids is not None:
+            body["cbids"] = list(cbids)
+        return self._c.request("PATCH", f"/keys/{_e(prefix)}", body=body)
 
 
 class _Webhooks(_Resource):
@@ -444,8 +600,45 @@ class _Webhooks(_Resource):
             body["cbid"] = cbid
         return t.from_dict(t.WebhookSubscription, self._c.request("POST", "/webhooks", body=body))
 
+    def update(
+        self,
+        id: str,
+        *,
+        url: Optional[str] = None,
+        events: Optional[List[str]] = None,
+        cbid: Any = _UNSET,
+        active: Optional[bool] = None,
+    ) -> _JSONDict:
+        """Change or pause a subscription. ``active=False`` pauses it; ``cbid=None`` widens it to the whole org."""
+        body: _JSONDict = {}
+        if url is not None:
+            body["url"] = url
+        if events is not None:
+            body["events"] = list(events)
+        if cbid is not _UNSET:
+            body["cbid"] = cbid
+        if active is not None:
+            body["active"] = active
+        return self._c.request("PATCH", f"/webhooks/{_e(id)}", body=body)
+
     def delete(self, id: str) -> None:
         self._c.request("DELETE", f"/webhooks/{_e(id)}")
+
+    def roll_secret(self, id: str) -> _JSONDict:
+        """Rotate the signing secret. The new secret is returned once."""
+        return self._c.request("POST", f"/webhooks/{_e(id)}/roll")
+
+    def test(self, id: str) -> _JSONDict:
+        """Send a signed test event now and report what the endpoint answered."""
+        return self._c.request("POST", f"/webhooks/{_e(id)}/test")
+
+    def dead_letters(self) -> _JSONDict:
+        """Deliveries that failed every retry, newest first."""
+        return self._c._get("/webhooks/dead-letters")
+
+    def replay_dead_letter(self, id: str) -> _JSONDict:
+        """Deliver a dead letter again, to the subscription as it is now."""
+        return self._c.request("POST", f"/webhooks/dead-letters/{_e(id)}/replay")
 
 
 class _Banners(_Resource):
@@ -486,6 +679,352 @@ class _Banners(_Resource):
 
     def publish(self, id: str) -> _JSONDict:
         return self._c.request("POST", f"/banners/{_e(id)}/publish")
+
+
+# -- the privacy platform ---------------------------------------------------------------
+#
+# Identity, vault and profile reads are POSTs on purpose: a person's identifiers travel in
+# the request body, never in a URL where logs and proxies would keep them.
+
+Identifiers = List[Mapping[str, str]]
+"""A person's identifiers, e.g. ``[{"space": "email_sha256", "value": "<hex>"}]``."""
+
+
+
+class _Identity(_Resource):
+    def resolve(self, identifiers: Identifiers) -> _JSONDict:
+        """The subject id for these identifiers, or ``None`` if unknown."""
+        return self._c.request("POST", "/identity/resolve", body={"identifiers": list(identifiers)})
+
+    def link(self, identifiers: Identifiers) -> _JSONDict:
+        """Stitch identifiers into one subject. A durable merge."""
+        return self._c.request("POST", "/identity/link", body={"identifiers": list(identifiers)})
+
+    def cluster(self, subject_id: str) -> _JSONDict:
+        return self._c._get(f"/identity/{_e(subject_id)}")
+
+
+class _Vault(_Resource):
+    def record(self, identifiers: Identifiers, decisions: List[Mapping[str, Any]]) -> _JSONDict:
+        return self._c.request(
+            "POST", "/vault/record", body={"identifiers": list(identifiers), "decisions": list(decisions)}
+        )
+
+    def current(self, identifiers: Identifiers) -> _JSONDict:
+        """Allow/deny per purpose, resolved across all of the person's identifiers."""
+        return self._c.request("POST", "/vault/current", body={"identifiers": list(identifiers)})
+
+    def permits(self, identifiers: Identifiers) -> _JSONDict:
+        """The same decisions in full: legal basis, jurisdiction, provenance, time."""
+        return self._c.request("POST", "/vault/permits", body={"identifiers": list(identifiers)})
+
+
+class _Profile(_Resource):
+    def get(self, identifiers: Identifiers) -> _JSONDict:
+        return self._c.request("POST", "/profile/get", body={"identifiers": list(identifiers)})
+
+    def set_attributes(self, identifiers: Identifiers, attributes: Mapping[str, Mapping[str, Any]]) -> _JSONDict:
+        return self._c.request(
+            "POST", "/profile/attributes", body={"identifiers": list(identifiers), "attributes": dict(attributes)}
+        )
+
+    def activate(self, identifiers: Identifiers, purpose: str) -> _JSONDict:
+        """Attribute values usable for ``purpose`` — empty when the person has not consented to it."""
+        return self._c.request(
+            "POST", "/profile/activate", body={"identifiers": list(identifiers), "purpose": purpose}
+        )
+
+
+class _Subscriptions(_Resource):
+    def topics(self) -> _JSONDict:
+        return self._c._get("/subscriptions/topics")
+
+    def set_topics(self, topics: List[Mapping[str, Any]]) -> _JSONDict:
+        """Replace the topic catalog. It is authored whole; anything omitted is removed."""
+        return self._c.request("PUT", "/subscriptions/topics", body={"topics": list(topics)})
+
+    def get(self, subject_id: str) -> _JSONDict:
+        return self._c._get(f"/subscriptions/{_e(subject_id)}")
+
+    def set(self, subject_id: str, topic: str, channel: str, opted_in: bool) -> _JSONDict:
+        return self._c.request(
+            "PUT",
+            f"/subscriptions/{_e(subject_id)}",
+            body={"topic": topic, "channel": channel, "optedIn": opted_in},
+        )
+
+    def unsubscribe_all(self, subject_id: str) -> _JSONDict:
+        return self._c.request("POST", f"/subscriptions/{_e(subject_id)}/unsubscribe-all")
+
+    def resubscribe(self, subject_id: str) -> _JSONDict:
+        """Lift a global unsubscribe, restoring the per-topic choices from before it."""
+        return self._c.request("POST", f"/subscriptions/{_e(subject_id)}/resubscribe")
+
+    def activation(self, subject_id: str, topics: List[Mapping[str, Any]]) -> _JSONDict:
+        return self._c.request(
+            "POST", f"/subscriptions/{_e(subject_id)}/activation", body={"topics": list(topics)}
+        )
+
+
+class _Assessments(_Resource):
+    def templates(self) -> _JSONDict:
+        return self._c._get("/assessments/templates")
+
+    def list(self) -> _JSONDict:
+        return self._c._get("/assessments")
+
+    def start(self, template: str, subject: str) -> _JSONDict:
+        return self._c.request("POST", "/assessments", body={"template": template, "subject": subject})
+
+    def get(self, id: str) -> _JSONDict:
+        return self._c._get(f"/assessments/{_e(id)}")
+
+    def answer(self, id: str, question_id: str, value: Any) -> _JSONDict:
+        return self._c.request(
+            "POST", f"/assessments/{_e(id)}/answer", body={"questionId": question_id, "value": value}
+        )
+
+    def auto_populate_from_map(self, id: str) -> _JSONDict:
+        """Fill factual answers from the latest data map. Never overwrites a human answer."""
+        return self._c.request("POST", f"/assessments/{_e(id)}/autopopulate-from-map")
+
+    def auto_populate(self, id: str, evidence: Mapping[str, Any], source: Optional[str] = None) -> _JSONDict:
+        """Fill from evidence you supply, stamped with ``source``. Never overwrites a human answer."""
+        body: _JSONDict = {"evidence": dict(evidence)}
+        if source is not None:
+            body["source"] = source
+        return self._c.request("POST", f"/assessments/{_e(id)}/autopopulate", body=body)
+
+    def submit(self, id: str) -> _JSONDict:
+        return self._c.request("POST", f"/assessments/{_e(id)}/submit")
+
+    def approve(self, id: str, by: str) -> _JSONDict:
+        """Record approval. ``by`` becomes the approval record — pass the person who approved."""
+        return self._c.request("POST", f"/assessments/{_e(id)}/approve", body={"by": by})
+
+    def reject(self, id: str, by: str, reason: str) -> _JSONDict:
+        return self._c.request("POST", f"/assessments/{_e(id)}/reject", body={"by": by, "reason": reason})
+
+
+class _Discovery(_Resource):
+    def ingest_map(self, map: Mapping[str, Any]) -> _JSONDict:
+        """Upload a data map produced by an in-environment scan (metadata only)."""
+        return self._c.request("POST", "/discovery/map", body={"map": dict(map)})
+
+    def get_map(self) -> _JSONDict:
+        return self._c._get("/discovery/map")
+
+    def ropa_drafts(self) -> _JSONDict:
+        return self._c._get("/discovery/ropa-drafts")
+
+    def evidence(self) -> _JSONDict:
+        return self._c._get("/discovery/evidence")
+
+    def drift(self) -> _JSONDict:
+        """What changed since the last scan, and where the RoPA disagrees with reality."""
+        return self._c._get("/discovery/drift")
+
+    def plan_enforcement(
+        self,
+        dialect: str,
+        rules: List[Mapping[str, Any]],
+        *,
+        permits_table: Optional[str] = None,
+        policy_prefix: Optional[str] = None,
+    ) -> _JSONDict:
+        """Plan masking / row-access policy for a warehouse. Applies nothing."""
+        body: _JSONDict = {"dialect": dialect, "rules": list(rules)}
+        if permits_table is not None:
+            body["permitsTable"] = permits_table
+        if policy_prefix is not None:
+            body["policyPrefix"] = policy_prefix
+        return self._c.request("POST", "/discovery/enforcement", body=body)
+
+
+class _Ai(_Resource):
+    def get_policy(self) -> _JSONDict:
+        return self._c._get("/ai/policy")
+
+    def set_policy(self, policy: Mapping[str, Any]) -> _JSONDict:
+        """Replace the AI gateway policy."""
+        return self._c.request("PUT", "/ai/policy", body={"policy": dict(policy)})
+
+    def inspect(self, input: Mapping[str, Any]) -> _JSONDict:
+        """Enforce consent and policy on a prompt or response. Needs the ``ai:inspect`` scope."""
+        return self._c.request("POST", "/ai/inspect", body=dict(input))
+
+    def inventory(self) -> _JSONDict:
+        return self._c._get("/ai/inventory")
+
+    def lineage(self) -> _JSONDict:
+        return self._c._get("/ai/lineage")
+
+    def register_system(
+        self, *, id: str, name: str, provider: Optional[str] = None, purpose: Optional[str] = None
+    ) -> _JSONDict:
+        body: _JSONDict = {"id": id, "name": name}
+        if provider is not None:
+            body["provider"] = provider
+        if purpose is not None:
+            body["purpose"] = purpose
+        return self._c.request("POST", "/ai/systems", body=body)
+
+    def systems(self) -> _JSONDict:
+        return self._c._get("/ai/systems")
+
+    def audit(self, limit: Optional[int] = None) -> _JSONDict:
+        return self._c._get(f"/ai/audit{_qs({'limit': limit})}")
+
+
+class _Fulfillment(_Resource):
+    def sla(self) -> _JSONDict:
+        return self._c._get("/dsar/sla")
+
+    def plan(
+        self, request_id: str, systems: List[Mapping[str, str]], include_historical: bool = False
+    ) -> _JSONDict:
+        body: _JSONDict = {"systems": list(systems)}
+        if include_historical:
+            body["includeHistorical"] = True
+        return self._c.request("POST", f"/dsar/{_e(request_id)}/plan", body=body)
+
+    def status(self, request_id: str) -> _JSONDict:
+        return self._c._get(f"/dsar/{_e(request_id)}/fulfillment")
+
+    def pending_tasks(self, limit: Optional[int] = None) -> _JSONDict:
+        """For the in-environment agent: tasks to execute inside your network."""
+        return self._c._get(f"/dsar/agent/tasks{_qs({'limit': limit})}")
+
+    def report_task(self, task_id: str, ok: bool, error: Optional[str] = None) -> _JSONDict:
+        """For the in-environment agent: report an outcome. Only the outcome crosses the boundary."""
+        body: _JSONDict = {"ok": ok}
+        if error is not None:
+            body["error"] = error
+        return self._c.request("POST", f"/dsar/agent/tasks/{_e(task_id)}/result", body=body)
+
+
+class _Regulatory(_Resource):
+    def feed(self, jurisdictions: Optional[List[str]] = None) -> _JSONDict:
+        query = _qs({"jurisdictions": ",".join(jurisdictions) if jurisdictions else None})
+        return self._c._get(f"/regulatory/feed{query}")
+
+    def upcoming(self, days: Optional[int] = None) -> _JSONDict:
+        return self._c._get(f"/regulatory/upcoming{_qs({'days': days})}")
+
+
+class _Subjects(_Resource):
+    def consent(self, subject_id: str) -> _JSONDict:
+        """One person's consent across every site in the org, by the subject id your apps attach.
+        Needs ``consent:read``; not available to property-locked keys."""
+        return self._c._get(f"/subjects/{_e(subject_id)}/consent")
+
+
+class _Org(_Resource):
+    """The key's organisation. Requires an unscoped key that is not property-locked."""
+
+    def get(self) -> t.Org:
+        return t.from_dict(t.Org, self._c._get("/org"))
+
+    def update(self, *, name: Optional[str] = None, logo_url: Any = _UNSET) -> t.Org:
+        """Rename the org or set its logo. ``logo_url=None`` removes the logo; omitting
+        it leaves the logo unchanged. Deleting the org is not available through the API."""
+        body: _JSONDict = {}
+        if name is not None:
+            body["name"] = name
+        if logo_url is not _UNSET:
+            body["logoUrl"] = logo_url
+        return t.from_dict(t.Org, self._c.request("PATCH", "/org", body=body))
+
+
+class _Assets(_Resource):
+    def upload(self, *, data: str, content_type: str) -> _JSONDict:
+        """Upload a banner image (<= 1,000,000 bytes; base64, or a data: URL) and get
+        its public URL. Requires sites:write."""
+        return self._c.request("POST", "/assets", body={"data": data, "contentType": content_type})
+
+
+class _Reseller(_Resource):
+    """Provision and manage child orgs. Needs a key with the ``reseller:*`` scopes."""
+
+    def list(self) -> _JSONDict:
+        return self._c._get("/reseller/customers")
+
+    def create(
+        self,
+        *,
+        name: str,
+        owner_email: Optional[str] = None,
+        controller: Optional[Mapping[str, Any]] = None,
+        white_label: Optional[Mapping[str, Any]] = None,
+        delegated_access: Optional[bool] = None,
+        mint_key: Optional[bool] = None,
+        key_scopes: Optional[List[str]] = None,
+    ) -> _JSONDict:
+        """Provision a child org. With ``mint_key``, its first API key is returned once as ``apiKey``."""
+        body: _JSONDict = {"name": name}
+        for key, value in (
+            ("ownerEmail", owner_email),
+            ("controller", dict(controller) if controller is not None else None),
+            ("whiteLabel", dict(white_label) if white_label is not None else None),
+            ("delegatedAccess", delegated_access),
+            ("mintKey", mint_key),
+            ("keyScopes", list(key_scopes) if key_scopes is not None else None),
+        ):
+            if value is not None:
+                body[key] = value
+        return self._c.request("POST", "/reseller/customers", body=body)
+
+    def get(self, id: str) -> _JSONDict:
+        return self._c._get(f"/reseller/customers/{_e(id)}")
+
+    def update(
+        self,
+        id: str,
+        *,
+        status: Optional[str] = None,
+        delegated_access: Optional[bool] = None,
+        dsar_routing: Any = _UNSET,
+        controller: Optional[Mapping[str, Any]] = None,
+    ) -> _JSONDict:
+        """Update a child. Pass ``dsar_routing=None`` to clear its override."""
+        body: _JSONDict = {}
+        if status is not None:
+            body["status"] = status
+        if delegated_access is not None:
+            body["delegatedAccess"] = delegated_access
+        if dsar_routing is not _UNSET:
+            body["dsarRouting"] = dsar_routing
+        if controller is not None:
+            body["controller"] = dict(controller)
+        return self._c.request("PATCH", f"/reseller/customers/{_e(id)}", body=body)
+
+    def deprovision(self, id: str, *, purge: bool = False) -> None:
+        """Suspend a child (reversible). ``purge=True`` deletes it and its data — irreversibly."""
+        self._c.request("DELETE", f"/reseller/customers/{_e(id)}{_qs({'purge': 'true' if purge else None})}")
+
+    def list_keys(self, id: str) -> Any:
+        return self._c._get(f"/reseller/customers/{_e(id)}/keys")
+
+    def mint_key(
+        self,
+        id: str,
+        *,
+        name: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        cbids: Optional[List[str]] = None,
+    ) -> _JSONDict:
+        """Mint an API key for a child org; the secret is returned once."""
+        body: _JSONDict = {}
+        if name is not None:
+            body["name"] = name
+        if scopes is not None:
+            body["scopes"] = list(scopes)
+        if cbids is not None:
+            body["cbids"] = list(cbids)
+        return self._c.request("POST", f"/reseller/customers/{_e(id)}/keys", body=body)
+
+    def revoke_key(self, id: str, prefix: str) -> None:
+        self._c.request("DELETE", f"/reseller/customers/{_e(id)}/keys/{_e(prefix)}")
 
 
 def _e(value: str) -> str:

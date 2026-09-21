@@ -100,10 +100,20 @@ cm = CookieMunch(api_key="fck_test", transport=fake)
 
 ## Resource surface
 
-`me()`, `usage()`, `log_consent(...)`, plus:
-`sites` · `consent` · `dsar` · `vendors` · `ropa` · `brand_kits` · `preferences` ·
-`members` · `keys` · `webhooks` · `banners` — each mirroring the `/v1/*` endpoints of
-the Developer API one-to-one.
+`me()`, `usage()`, `audit(limit=None)`, `log_consent(...)`, plus:
+
+- **Consent platform** — `sites` · `consent` · `dsar` · `vendors` · `ropa` · `brand_kits` ·
+  `preferences` · `members` · `keys` · `webhooks` · `banners` · `org` · `assets`
+- **Privacy platform** — `identity` · `vault` · `profile` · `subscriptions` ·
+  `assessments` · `discovery` · `ai` · `fulfillment` · `regulatory`
+- **Resellers** — `reseller`
+
+Every operation of the `/v1` Developer API is reachable. `tests/test_parity.py` checks
+that against `sdks/operations.json`, which is generated from the server's OpenAPI
+document — so a new endpoint fails this suite until the SDK implements it.
+
+Identity, vault and profile reads are `POST`s on purpose: a person's identifiers travel
+in the request body, never in a URL where logs and proxies would keep them.
 
 ## Development
 

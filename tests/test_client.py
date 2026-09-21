@@ -198,6 +198,128 @@ class PostTests(unittest.TestCase):
         self.assertEqual(tr.last["method"], "DELETE")
 
 
+class NewOperationsTests(unittest.TestCase):
+    """Pins method+path+body for the 13 operations added in commit 1c08ee6."""
+
+    def test_org_get(self):
+        tr = RecordingTransport([_json_response({"id": "org_1", "name": "Acme", "plan": "pro", "logoUrl": None})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        org = cm.org.get()
+        self.assertEqual(tr.last["method"], "GET")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/org")
+        self.assertEqual(org.id, "org_1")
+
+    def test_org_update_logo_url_none_sends_json_null(self):
+        tr = RecordingTransport([_json_response({"id": "org_1", "name": "Acme", "plan": "pro", "logoUrl": None})])
+        cm = CookieMunch(api_key="fck_x", transport=tr)
+        cm.org.update(logo_url=None)
+        self.assertEqual(tr.last["method"], "PATCH")
+        self.assertIn("logoUrl", tr.last["body"])
+        self.assertIsNone(tr.last["body"]["logoUrl"])
+
+    def test_org_update_omitted_logo_url_sends_no_key(self):
+        tr = RecordingTransport([_json_response({"id": "org_1", "name": "Acme", "plan": "pro", "logoUrl": None})])
+        cm = CookieMunch(api_key="fck_x", transport=tr)
+        cm.org.update(name="New Name")
+        self.assertEqual(tr.last["body"], {"name": "New Name"})
+        self.assertNotIn("logoUrl", tr.last["body"])
+
+    def test_audit_query_param(self):
+        tr = RecordingTransport([_json_response({"entries": []})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.audit(limit=50)
+        self.assertEqual(tr.last["method"], "GET")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/audit?limit=50")
+
+    def test_audit_omits_limit_when_absent(self):
+        tr = RecordingTransport([_json_response({"entries": []})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.audit()
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/audit")
+
+    def test_assets_upload(self):
+        tr = RecordingTransport([_json_response({"url": "https://cdn.example.com/x.png"})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        result = cm.assets.upload(data="Zm9v", content_type="image/png")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/assets")
+        self.assertEqual(tr.last["body"], {"data": "Zm9v", "contentType": "image/png"})
+        self.assertEqual(result["url"], "https://cdn.example.com/x.png")
+
+    def test_keys_roll(self):
+        tr = RecordingTransport([_json_response({"key": "fck_new", "prefix": "fck_ab"})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.keys.roll("fck_ab")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/keys/fck_ab/roll")
+
+    def test_keys_update_sends_only_provided_fields(self):
+        tr = RecordingTransport([_json_response({"ok": True})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.keys.update("fck_ab", name="renamed")
+        self.assertEqual(tr.last["method"], "PATCH")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/keys/fck_ab")
+        self.assertEqual(tr.last["body"], {"name": "renamed"})
+
+    def test_keys_update_scopes_and_cbids(self):
+        tr = RecordingTransport([_json_response({"ok": True})])
+        cm = CookieMunch(api_key="fck_x", transport=tr)
+        cm.keys.update("fck_ab", scopes=["sites:read"], cbids=["c1"])
+        self.assertEqual(tr.last["body"], {"scopes": ["sites:read"], "cbids": ["c1"]})
+
+    def test_webhooks_roll_secret(self):
+        tr = RecordingTransport([_json_response({"secret": "whsec_new"})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.webhooks.roll_secret("wh_1")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/webhooks/wh_1/roll")
+
+    def test_webhooks_test(self):
+        tr = RecordingTransport([_json_response({"ok": True, "status": 200})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        result = cm.webhooks.test("wh_1")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/webhooks/wh_1/test")
+        self.assertTrue(result["ok"])
+
+    def test_webhooks_dead_letters(self):
+        tr = RecordingTransport([_json_response({"deadLetters": []})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.webhooks.dead_letters()
+        self.assertEqual(tr.last["method"], "GET")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/webhooks/dead-letters")
+
+    def test_webhooks_replay_dead_letter(self):
+        tr = RecordingTransport([_json_response({"ok": True})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.webhooks.replay_dead_letter("dl_1")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/webhooks/dead-letters/dl_1/replay")
+
+    def test_preferences_get(self):
+        tr = RecordingTransport([_json_response({"subjectId": "sub_1", "purposes": {}})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.preferences.get("sub 1")
+        self.assertEqual(tr.last["method"], "GET")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/preferences/sub%201")
+
+    def test_dsar_erase(self):
+        tr = RecordingTransport([_json_response({"erased": 1, "encryptionEnabled": True, "request": {"id": "d1"}})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.dsar.erase("d1", "cbid1", "stamp1")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/dsar/d1/erase")
+        self.assertEqual(tr.last["body"], {"cbid": "cbid1", "stamp": "stamp1"})
+
+    def test_dsar_export(self):
+        tr = RecordingTransport([_json_response({"records": [], "count": 0, "request": {"id": "d1"}})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.dsar.export("d1", "cbid1", "stamp1")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/dsar/d1/export")
+        self.assertEqual(tr.last["body"], {"cbid": "cbid1", "stamp": "stamp1"})
+
+
 class ErrorMappingTests(unittest.TestCase):
     def test_non_2xx_raises_with_error_field(self):
         tr = RecordingTransport(
