@@ -305,6 +305,12 @@ class _Sites(_Resource):
         """Which banner design the site uses: ``{"bannerId": str | None}``."""
         return self._c._get(f"/sites/{_e(cbid)}/banner")
 
+    def blocked(self, cbid: str) -> _JSONDict:
+        """Pages where the embed could not load its banner renderer — the host page's
+        CSP or Trusted Types policy refused it, so nobody there can be asked. An empty
+        list is the healthy answer."""
+        return self._c._get(f"/sites/{_e(cbid)}/blocked")
+
     def policy(
         self,
         cbid: str,
