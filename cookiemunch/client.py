@@ -912,6 +912,37 @@ class _Fulfillment(_Resource):
     def status(self, request_id: str) -> _JSONDict:
         return self._c._get(f"/dsar/{_e(request_id)}/fulfillment")
 
+    def executors(self) -> List[_JSONDict]:
+        """GET /v1/dsar/executors — systems connected to run part of a request."""
+        return self._c._get("/dsar/executors")
+
+    def connect_executor(
+        self,
+        kind: str,
+        base_url: str,
+        secret_key: str,
+        webhook_secret: Optional[str] = None,
+        system: Optional[str] = None,
+        auto: Optional[bool] = None,
+    ) -> _JSONDict:
+        """POST /v1/dsar/executors — connect a system. The secret is never returned."""
+        body: _JSONDict = {"kind": kind, "baseUrl": base_url, "secretKey": secret_key}
+        if webhook_secret is not None:
+            body["webhookSecret"] = webhook_secret
+        if system is not None:
+            body["system"] = system
+        if auto is not None:
+            body["auto"] = auto
+        return self._c.request("POST", "/dsar/executors", body=body)
+
+    def disconnect_executor(self, id: str) -> None:
+        """DELETE /v1/dsar/executors/{id}."""
+        self._c.request("DELETE", f"/dsar/executors/{_e(id)}")
+
+    def task_export(self, request_id: str, task_id: str) -> _JSONDict:
+        """GET /v1/dsar/{id}/tasks/{taskId}/export — the bundle a connected system produced."""
+        return self._c._get(f"/dsar/{_e(request_id)}/tasks/{_e(task_id)}/export")
+
     def pending_tasks(self, limit: Optional[int] = None) -> _JSONDict:
         """For the in-environment agent: tasks to execute inside your network."""
         return self._c._get(f"/dsar/agent/tasks{_qs({'limit': limit})}")
