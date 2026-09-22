@@ -918,19 +918,27 @@ class _Fulfillment(_Resource):
 
     def connect_executor(
         self,
-        kind: str,
+        system: str,
         base_url: str,
         secret_key: str,
+        profile: Mapping[str, object],
         webhook_secret: Optional[str] = None,
-        system: Optional[str] = None,
         auto: Optional[bool] = None,
     ) -> _JSONDict:
-        """POST /v1/dsar/executors — connect a system. The secret is never returned."""
-        body: _JSONDict = {"kind": kind, "baseUrl": base_url, "secretKey": secret_key}
+        """POST /v1/dsar/executors — connect a system that runs part of a rights request.
+
+        ``profile`` describes that system's API — paths, the words it uses for export and
+        erase, its status vocabulary, how it signs webhooks — so connecting a new platform
+        needs no code. The secret is stored encrypted and never returned.
+        """
+        body: _JSONDict = {
+            "system": system,
+            "baseUrl": base_url,
+            "secretKey": secret_key,
+            "profile": dict(profile),
+        }
         if webhook_secret is not None:
             body["webhookSecret"] = webhook_secret
-        if system is not None:
-            body["system"] = system
         if auto is not None:
             body["auto"] = auto
         return self._c.request("POST", "/dsar/executors", body=body)
