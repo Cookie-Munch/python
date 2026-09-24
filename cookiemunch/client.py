@@ -420,6 +420,14 @@ class _Sites(_Resource):
 
 
 class _Consent(_Resource):
+    def verify(self, cbid: str) -> bool:
+        """Verify the consent log's tamper-evident hash chain.
+
+        Each record carries the hash of the one before it, so an edited, reordered or
+        removed record returns False. This is the evidence behind the log.
+        """
+        return bool(self._c._get(f"/sites/{_e(cbid)}/consent/verify").get("valid"))
+
     def stats(
         self, cbid: str, *, from_: Optional[int] = None, to: Optional[int] = None
     ) -> List[t.ConsentDay]:
