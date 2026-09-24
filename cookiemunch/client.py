@@ -297,6 +297,10 @@ class _Sites(_Resource):
     def put_config(self, cbid: str, config: Mapping[str, Any]) -> _JSONDict:
         return self._c.request("PUT", f"/sites/{_e(cbid)}/config", body=dict(config))
 
+    def patch_config(self, cbid: str, config: Mapping[str, Any]) -> _JSONDict:
+        """Change part of a site's config; omitted fields keep their stored value."""
+        return self._c.request("PATCH", f"/sites/{_e(cbid)}/config", body=dict(config))
+
     def cookies(self, cbid: str) -> List[t.SiteCookie]:
         return t.from_list(t.SiteCookie, self._c._get(f"/sites/{_e(cbid)}/cookies"))
 
