@@ -175,6 +175,16 @@ class CookieMunch:
         """GET /v1/me — identity for SDK bootstrapping."""
         return t.from_dict(t.Identity, self._get("/me"))
 
+    def create_org(self, name: str) -> _JSONDict:
+        """POST /v1/orgs — create a sibling organisation owned by the same account.
+
+        For starting a separate business of your own. Needs an unscoped key, and counts
+        against the account's plan org allowance (403 ``org_limit`` names the plan). This is
+        not reseller provisioning: ``/v1/reseller/customers`` is for organisations you run on
+        behalf of YOUR customers.
+        """
+        return self.request("POST", "/orgs", body={"name": name})
+
     def languages(self) -> List[t.SupportedLanguage]:
         """GET /v1/languages — the languages the banner already speaks.
 
