@@ -318,14 +318,21 @@ class _Sites(_Resource):
     def get_config(self, cbid: str) -> _JSONDict:
         return self._c._get(f"/sites/{_e(cbid)}/config")
 
-    def put_config(self, cbid: str, config: Mapping[str, Any]) -> _JSONDict:
-        return self._c.request("PUT", f"/sites/{_e(cbid)}/config", body=dict(config))
+    def put_config(self, cbid: str, config: Mapping[str, Any], keep_unspecified: bool = False) -> _JSONDict:
+        """Replace a site's config. A top-level field ``config`` omits reverts to its default —
+        unless ``keep_unspecified=True`` (``?keep=unspecified``), which keeps its stored value.
+        A top-level field sent as ``None`` reverts to its default."""
+        query = "?keep=unspecified" if keep_unspecified else ""
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/config{query}", body=dict(config))
 
     def patch_config(self, cbid: str, config: Mapping[str, Any]) -> _JSONDict:
-        """Change part of a site's config; omitted fields keep their stored value."""
+        """Change part of a site's config — a JSON Merge Patch (RFC 7386): omitted fields keep
+        their stored value, and a field set to ``None`` is removed (it takes its default)."""
         return self._c.request("PATCH", f"/sites/{_e(cbid)}/config", body=dict(config))
 
-    def dry_run_config(self, cbid: str, config: Mapping[str, Any], replace: bool = False) -> _JSONDict:
+    def dry_run_config(
+        self, cbid: str, config: Mapping[str, Any], replace: bool = False, keep_unspecified: bool = False
+    ) -> _JSONDict:
         """Preview a config write without saving it (``?dryRun=1``).
 
         Returns ``config`` as it would be saved, ``diff`` (every leaf that would change)
@@ -333,7 +340,8 @@ class _Sites(_Resource):
         a replace would revert to its default.
         """
         method = "PUT" if replace else "PATCH"
-        return self._c.request(method, f"/sites/{_e(cbid)}/config?dryRun=1", body=dict(config))
+        keep = "&keep=unspecified" if replace and keep_unspecified else ""
+        return self._c.request(method, f"/sites/{_e(cbid)}/config?dryRun=1{keep}", body=dict(config))
 
     def cookies(self, cbid: str) -> List[t.SiteCookie]:
         return t.from_list(t.SiteCookie, self._c._get(f"/sites/{_e(cbid)}/cookies"))
@@ -363,6 +371,47 @@ class _Sites(_Resource):
         cookie in the wrong category is a tag firing against a refusal, so the result
         comes back for review."""
         return self._c.request("POST", f"/sites/{_e(cbid)}/import", body={"data": data})
+
+    def apply_import(self, cbid: str, data: str, *, overwrite: bool = False) -> _JSONDict:
+        """Import a declaration exported from another CMP AND declare it: every row whose
+        category mapped to ours and that has a purpose is declared; the rest come back in
+        ``skipped``. Cookies already declared are kept unless ``overwrite``."""
+        query = "?apply=1" + ("&overwrite=1" if overwrite else "")
+        return self._c.request("POST", f"/sites/{_e(cbid)}/import{query}", body={"data": data})
+
+    def declare_cookie(
+        self,
+        cbid: str,
+        name: str,
+        category: str,
+        purpose: str,
+        *,
+        provider: Optional[str] = None,
+        expiry: Optional[str] = None,
+        domain: Optional[str] = None,
+        pattern: Optional[bool] = None,
+    ) -> _JSONDict:
+        """Declare what one cookie is. Overrides scanned, observed and database
+        classification everywhere (API, preference modal, ``data-cc="declaration"``).
+        A name ending in ``*`` (or ``pattern=True``) declares a prefix wildcard.
+        ``category`` is a standard category or one of the site's custom category ids."""
+        body: _JSONDict = {"category": category, "purpose": purpose}
+        for key, value in (("provider", provider), ("expiry", expiry), ("domain", domain), ("pattern", pattern)):
+            if value is not None:
+                body[key] = value
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/{_e(name)}", body=body)
+
+    def declare_cookies(self, cbid: str, cookies: List[_JSONDict], *, replace: bool = False) -> _JSONDict:
+        """Declare many cookies at once (each ``{name, category, purpose, ...}``).
+        All-or-nothing; ``replace=True`` also removes declarations the list does not name."""
+        body: _JSONDict = {"cookies": cookies}
+        if replace:
+            body["replace"] = True
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies", body=body)
+
+    def undeclare_cookie(self, cbid: str, name: str) -> None:
+        """Remove a declaration; the scanned classification applies again."""
+        self._c.request("DELETE", f"/sites/{_e(cbid)}/cookies/{_e(name)}")
 
     def policy(
         self,
@@ -552,6 +601,12 @@ class _Dsar(_Resource):
     def delete(self, id: str) -> None:
         """DELETE /v1/dsar/{id} — delete a TEST request. Real requests are refused (409)."""
         self._c.request("DELETE", f"/dsar/{_e(id)}")
+
+    def mark_test(self, id: str) -> _JSONDict:
+        """POST /v1/dsar/{id}/mark-test — mark a CLOSED request (completed or rejected) as a test,
+        after the fact. An open one is refused (409 ``request_not_closed``). Audited; ``delete``
+        then works on it. Returns ``{"request": ..., "changed": bool}``."""
+        return self._c.request("POST", f"/dsar/{_e(id)}/mark-test")
 
     def advance(self, id: str, to_status: str) -> _JSONDict:
         return self._c.request("POST", f"/dsar/{_e(id)}/advance", body={"toStatus": to_status})
