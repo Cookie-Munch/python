@@ -88,7 +88,15 @@ def from_list(cls: Type[T], data: Any) -> List[T]:
 @dataclass
 class Identity:
     org_id: Optional[str] = None
+    org_name: Optional[str] = None
+    #: The EFFECTIVE plan — the one every feature gate and limit uses.
     plan: Optional[str] = None
+    #: "org" (own subscription / free / reseller child) or "account" (covered by a
+    #: higher plan another org with the same owner pays for).
+    plan_source: Optional[str] = None
+    #: What this org subscribes to itself ("free" = no subscription of its own).
+    subscribed_plan: Optional[str] = None
+    features: Optional[List[str]] = None
     key_prefix: Optional[str] = None
 
 

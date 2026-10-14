@@ -51,6 +51,26 @@ def _json_response(payload: Any, status: int = 200) -> HttpResponse:
     )
 
 
+class UserAgentTests(unittest.TestCase):
+    def test_names_itself_instead_of_python_urllib(self):
+        # urllib's default UA is refused at the API's edge (403 "error code: 1010").
+        tr = RecordingTransport([_json_response({})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.me()
+        self.assertTrue(tr.last["headers"]["User-Agent"].startswith("cookiemunch-python/"))
+
+
+class DryRunConfigTests(unittest.TestCase):
+    def test_patch_and_put_previews(self):
+        tr = RecordingTransport()
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.sites.dry_run_config("s1", {"defaultMode": "opt-out"})
+        self.assertEqual(tr.last["method"], "PATCH")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/sites/s1/config?dryRun=1")
+        cm.sites.dry_run_config("s1", {"defaultMode": "opt-out"}, replace=True)
+        self.assertEqual(tr.last["method"], "PUT")
+
+
 class AuthHeaderTests(unittest.TestCase):
     def test_bearer_and_x_api_key_headers_are_sent(self):
         tr = RecordingTransport([_json_response({"orgId": "org_1", "plan": "pro", "keyPrefix": "fck_ab"})])

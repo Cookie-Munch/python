@@ -25,6 +25,7 @@ from .errors import CookieMunchApiError
 __all__ = ["CookieMunch"]
 
 DEFAULT_BASE_URL = "https://api.cookiemunch.net"
+_SDK_VERSION = "0.1.0"
 
 _JSONDict = Dict[str, Any]
 _ChoicesLike = Union[t.ConsentChoices, Mapping[str, bool]]
@@ -107,6 +108,9 @@ class CookieMunch:
             "Authorization": f"Bearer {self.api_key}",
             "X-API-Key": self.api_key,
             "Accept": "application/json",
+            # urllib's default "Python-urllib/3.x" is refused at the API's edge with a bare
+            # 403 "error code: 1010" (CMN-14), so every call from the default transport failed.
+            "User-Agent": f"cookiemunch-python/{_SDK_VERSION}",
         }
         if extra:
             headers.update(extra)
@@ -174,6 +178,16 @@ class CookieMunch:
     def me(self) -> t.Identity:
         """GET /v1/me — identity for SDK bootstrapping."""
         return t.from_dict(t.Identity, self._get("/me"))
+
+    def list_orgs(self) -> _JSONDict:
+        """GET /v1/orgs — every organisation on this key's account.
+
+        Each carries its effective ``plan``, ``planSource`` (``org`` = its own subscription,
+        ``account`` = covered by a higher plan another org on the account pays for) and
+        ``subscribedPlan``; the response also has ``orgLimit`` (``max``/``plan``/``used``) and
+        ``upgradeUrl``. Needs an unscoped key that is not locked to properties.
+        """
+        return self._get("/orgs")
 
     def create_org(self, name: str) -> _JSONDict:
         """POST /v1/orgs — create a sibling organisation owned by the same account.
@@ -311,6 +325,16 @@ class _Sites(_Resource):
         """Change part of a site's config; omitted fields keep their stored value."""
         return self._c.request("PATCH", f"/sites/{_e(cbid)}/config", body=dict(config))
 
+    def dry_run_config(self, cbid: str, config: Mapping[str, Any], replace: bool = False) -> _JSONDict:
+        """Preview a config write without saving it (``?dryRun=1``).
+
+        Returns ``config`` as it would be saved, ``diff`` (every leaf that would change)
+        and any ``warnings``. ``replace=True`` previews a PUT: the diff then lists what
+        a replace would revert to its default.
+        """
+        method = "PUT" if replace else "PATCH"
+        return self._c.request(method, f"/sites/{_e(cbid)}/config?dryRun=1", body=dict(config))
+
     def cookies(self, cbid: str) -> List[t.SiteCookie]:
         return t.from_list(t.SiteCookie, self._c._get(f"/sites/{_e(cbid)}/cookies"))
 
@@ -417,6 +441,29 @@ class _Sites(_Resource):
     def brand(self, cbid: str) -> _JSONDict:
         return self._c.request("POST", f"/sites/{_e(cbid)}/brand", body={})
 
+    def preview_token(
+        self,
+        cbid: str,
+        *,
+        region: Optional[str] = None,
+        lang: Optional[str] = None,
+        url: Optional[str] = None,
+        ttl_seconds: Optional[int] = None,
+    ) -> _JSONDict:
+        """Mint a short-lived signed token to preview the banner as a visitor in ``region``
+        speaking ``lang`` sees it (headless browsers included; nothing is recorded).
+        Returns ``{cbid, token, expiresAt, previewUrl?, region?, lang?}``."""
+        body: Dict[str, Any] = {}
+        if region is not None:
+            body["region"] = region
+        if lang is not None:
+            body["lang"] = lang
+        if url is not None:
+            body["url"] = url
+        if ttl_seconds is not None:
+            body["ttlSeconds"] = ttl_seconds
+        return self._c.request("POST", f"/sites/{_e(cbid)}/preview-token", body=body)
+
     def get_flow(self, cbid: str) -> _JSONDict:
         return self._c._get(f"/sites/{_e(cbid)}/flow")
 
@@ -484,7 +531,9 @@ class _Dsar(_Resource):
         subject_email: str,
         regulation: str,
         note: Optional[str] = None,
+        test: Optional[bool] = None,
     ) -> _JSONDict:
+        """``test=True`` files a test request: off the SLA board, labelled, deletable."""
         body: _JSONDict = {
             "type": type,
             "subjectEmail": subject_email,
@@ -492,7 +541,17 @@ class _Dsar(_Resource):
         }
         if note is not None:
             body["note"] = note
+        if test is not None:
+            body["test"] = test
         return self._c.request("POST", "/dsar", body=body)
+
+    def get(self, id: str) -> _JSONDict:
+        """GET /v1/dsar/{id} — one request, in the shape ``list`` returns."""
+        return self._c._get(f"/dsar/{_e(id)}")
+
+    def delete(self, id: str) -> None:
+        """DELETE /v1/dsar/{id} — delete a TEST request. Real requests are refused (409)."""
+        self._c.request("DELETE", f"/dsar/{_e(id)}")
 
     def advance(self, id: str, to_status: str) -> _JSONDict:
         return self._c.request("POST", f"/dsar/{_e(id)}/advance", body={"toStatus": to_status})
@@ -965,9 +1024,56 @@ class _Fulfillment(_Resource):
             body["auto"] = auto
         return self._c.request("POST", "/dsar/executors", body=body)
 
+    def update_executor(
+        self,
+        id: str,
+        *,
+        profile: Optional[Mapping[str, object]] = None,
+        base_url: Optional[str] = None,
+        secret_key: Optional[str] = None,
+        webhook_secret: Any = _UNSET,
+        auto: Optional[bool] = None,
+    ) -> _JSONDict:
+        """PATCH /v1/dsar/executors/{id} — change a connection in place.
+
+        Only what you pass changes; the stored credential is kept unless ``secret_key`` is
+        given. ``webhook_secret=None`` removes the webhook secret.
+        """
+        body: _JSONDict = {}
+        if profile is not None:
+            body["profile"] = dict(profile)
+        if base_url is not None:
+            body["baseUrl"] = base_url
+        if secret_key is not None:
+            body["secretKey"] = secret_key
+        if webhook_secret is not _UNSET:
+            body["webhookSecret"] = webhook_secret
+        if auto is not None:
+            body["auto"] = auto
+        return self._c.request("PATCH", f"/dsar/executors/{_e(id)}", body=body)
+
     def disconnect_executor(self, id: str) -> None:
         """DELETE /v1/dsar/executors/{id}."""
         self._c.request("DELETE", f"/dsar/executors/{_e(id)}")
+
+    def task(self, request_id: str, task_id: str) -> _JSONDict:
+        """GET /v1/dsar/{id}/tasks/{taskId} — one task: status history, upstream log, versions."""
+        return self._c._get(f"/dsar/{_e(request_id)}/tasks/{_e(task_id)}")
+
+    def test_executor(
+        self, id: str, email: str, operation: Optional[str] = None, open: Optional[bool] = None
+    ) -> _JSONDict:
+        """POST /v1/dsar/executors/{id}/test — try a connection without filing a request.
+
+        Runs the lookup and returns the raw (redacted) upstream answers. ``open=True`` on an
+        export opens and polls a real export once; an erasure is never sent.
+        """
+        body: _JSONDict = {"email": email}
+        if operation is not None:
+            body["operation"] = operation
+        if open is not None:
+            body["open"] = open
+        return self._c.request("POST", f"/dsar/executors/{_e(id)}/test", body=body)
 
     def task_export(self, request_id: str, task_id: str) -> _JSONDict:
         """GET /v1/dsar/{id}/tasks/{taskId}/export — the bundle a connected system produced."""
