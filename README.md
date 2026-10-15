@@ -34,6 +34,10 @@ sites = cm.sites.list()
 site = cm.sites.create(domain="example.com")
 config = cm.sites.get_config(site.cbid)
 cm.sites.put_config(site.cbid, {"consentMode": {"enabled": True}})
+# Consent-button parity: is "Accept all" pushed harder than "Reject all"? Nothing is saved.
+lint = cm.sites.lint_config(site.cbid, {"banner": {"type": "accept-decline"}})
+for f in lint["designWarnings"]:
+    print(f["severity"], f["code"], f["fix"])
 snippet = cm.sites.snippet(site.cbid, blocking_mode="auto")
 
 # Consent analytics + audit
@@ -106,6 +110,11 @@ cm = CookieMunch(api_key="fck_test", transport=fake)
   `preferences` · `members` · `keys` · `webhooks` · `banners` · `org` · `assets`
 - **Privacy platform** — `identity` · `vault` · `profile` · `subscriptions` ·
   `assessments` · `discovery` · `ai` · `fulfillment` · `regulatory`
+- **Rights page** — `rights_page`: the page (`get`, `put`, `patch`, `dry_run`, `get_published`, `publish`, `versions`, `rollback`; pass `base_updated_at=` to `publish`/`rollback` so only the draft you read goes live, and note a rollback replaces the draft) and its custom domains (`list_domains`, `add_domain`, `verify_domain`, `remove_domain`)
+- **Rights links** — `rights_links.create(...)`: a signed, single-use link to the rights page for a signed-in person
+- **Mail for rights requests** — `org.mail_provider`, `set_mail_provider`, `test_mail_provider`, `remove_mail_provider` (no code mail until a test succeeds; there is no shared sender)
+- **Rights-page captcha** — `rights_captcha.get`, `set`, `remove` per site; the org default via `org.rights_captcha`, `set_rights_captcha`, `remove_rights_captcha`
+- **Sign-in verification for rights requests** — `rights_identity.get`, `set(cbid, type=, issuer=, jwks_url=, audience=, authorized_parties=, email_claim=, email_verified_claim=, session_cookie_name=)`, `remove` per site; the org default via `org.rights_identity`, `set_rights_identity`, `remove_rights_identity`. Connect Clerk, Atlas or any JWKS issuer (`oidc_jwt`): a signed-in visitor is verified by their session, with no code mail
 - **Resellers** — `reseller`
 
 Every operation of the `/v1` Developer API is reachable. `tests/test_parity.py` checks

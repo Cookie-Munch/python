@@ -81,6 +81,7 @@ class CookieMunch:
         self.vendors = _Vendors(self)
         self.ropa = _Ropa(self)
         self.brand_kits = _BrandKits(self)
+        self.rights_page = _RightsPage(self)
         self.preferences = _Preferences(self)
         self.members = _Members(self)
         self.keys = _Keys(self)
@@ -98,6 +99,9 @@ class CookieMunch:
         self.regulatory = _Regulatory(self)
         self.reseller = _Reseller(self)
         self.subjects = _Subjects(self)
+        self.rights_links = _RightsLinks(self)
+        self.rights_captcha = _RightsCaptcha(self)
+        self.rights_identity = _RightsIdentity(self)
         self.org = _Org(self)
         self.assets = _Assets(self)
 
@@ -342,6 +346,19 @@ class _Sites(_Resource):
         method = "PUT" if replace else "PATCH"
         keep = "&keep=unspecified" if replace and keep_unspecified else ""
         return self._c.request(method, f"/sites/{_e(cbid)}/config?dryRun=1{keep}", body=dict(config))
+
+    def lint_config(self, cbid: str, config: Mapping[str, Any], replace: bool = False) -> _JSONDict:
+        """Check a proposed config for consent-button parity without saving it
+        (``POST /v1/sites/{cbid}/config/lint``): is "Accept all" more prominent than
+        "Reject all" anywhere (colour, size, placement, copy, custom CSS)?
+
+        Returns ``designWarnings`` (the findings), ``score`` (0-100) and ``suggestedReject``
+        (the reject style that would match). It checks exactly what the write would store:
+        merged as ``patch_config`` would, or with ``replace=True`` replaced as ``put_config``
+        would. Needs only ``sites:read``.
+        """
+        query = "?replace=1" if replace else ""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/config/lint{query}", body=dict(config))
 
     def cookies(self, cbid: str) -> List[t.SiteCookie]:
         return t.from_list(t.SiteCookie, self._c._get(f"/sites/{_e(cbid)}/cookies"))
@@ -646,6 +663,74 @@ class _Ropa(_Resource):
     def export_csv(self) -> str:
         """The org's RoPA (GDPR Art. 30), as CSV."""
         return self._c.request("GET", "/ropa/export.csv", raw=True)
+
+
+class _RightsPage(_Resource):
+    """The hosted rights page — /v1/sites/{cbid}/rights-page. Requires sites:read / sites:write."""
+
+    def get(self, cbid: str) -> _JSONDict:
+        """The draft (the default document until first saved), with publish warnings."""
+        return self._c._get(f"/sites/{_e(cbid)}/rights-page")
+
+    def put(self, cbid: str, page: Mapping[str, Any]) -> _JSONDict:
+        """Replace the draft. Nothing is live until :meth:`publish`.
+
+        Add ``"baseUpdatedAt"`` (the draft's ``updatedAt`` as last read; ``None`` if it had none) to
+        ``page`` to refuse overwriting a newer save: a mismatch raises a 409 ``draft_conflict``.
+        """
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/rights-page", body=dict(page))
+
+    def patch(self, cbid: str, page: Mapping[str, Any]) -> _JSONDict:
+        """Merge into the draft: objects merge, lists replace, None removes."""
+        return self._c.request("PATCH", f"/sites/{_e(cbid)}/rights-page", body=dict(page))
+
+    def dry_run(self, cbid: str, page: Mapping[str, Any], replace: bool = False) -> _JSONDict:
+        """Validate a write without saving it (``?dryRun=1``)."""
+        return self._c.request("PUT" if replace else "PATCH", f"/sites/{_e(cbid)}/rights-page?dryRun=1", body=dict(page))
+
+    def get_published(self, cbid: str) -> _JSONDict:
+        return self._c._get(f"/sites/{_e(cbid)}/rights-page/published")
+
+    def publish(self, cbid: str, base_updated_at: Any = _UNSET) -> _JSONDict:
+        """Publish the draft; it goes live at once.
+
+        Pass ``base_updated_at`` (the draft's ``updatedAt`` as last read; ``None`` if it had none) so
+        only the draft you saw goes live: a mismatch raises a 409 ``draft_conflict``.
+        """
+        body: _JSONDict = {} if base_updated_at is _UNSET else {"baseUpdatedAt": base_updated_at}
+        return self._c.request("POST", f"/sites/{_e(cbid)}/rights-page/publish", body=body)
+
+    def versions(self, cbid: str) -> _JSONDict:
+        return self._c._get(f"/sites/{_e(cbid)}/rights-page/versions")
+
+    def rollback(self, cbid: str, version: int, base_updated_at: Any = _UNSET) -> _JSONDict:
+        """Publish an earlier version again; it goes live at once and REPLACES the current draft
+        (unpublished edits are lost). ``base_updated_at`` refuses with a 409 ``draft_conflict``
+        if the draft changed since you read it.
+        """
+        body: _JSONDict = {"version": version}
+        if base_updated_at is not _UNSET:
+            body["baseUpdatedAt"] = base_updated_at
+        return self._c.request("POST", f"/sites/{_e(cbid)}/rights-page/rollback", body=body)
+
+    def list_domains(self, cbid: str) -> _JSONDict:
+        """Custom hostnames serving the rights page: ``{domains, limit, used, target}``
+        (``limit`` None = unlimited). Requires sites:read."""
+        return self._c._get(f"/sites/{_e(cbid)}/rights-page/domains")
+
+    def add_domain(self, cbid: str, hostname: str) -> _JSONDict:
+        """Add a custom hostname (e.g. privacy.example.com). The answer's ``dns`` holds the
+        exact records to create. Requires sites:write."""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/rights-page/domains", body={"hostname": hostname})
+
+    def verify_domain(self, cbid: str, hostname: str) -> _JSONDict:
+        """Check it now: DNS while pending, the HTTPS answer once routed. Returns the domain
+        as it stands (``status``, ``lastError``, ``dnsSeen``)."""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/rights-page/domains/{_e(hostname)}/verify")
+
+    def remove_domain(self, cbid: str, hostname: str) -> None:
+        """Remove it: it stops being served and its certificate is no longer renewed."""
+        self._c.request("DELETE", f"/sites/{_e(cbid)}/rights-page/domains/{_e(hostname)}")
 
 
 class _BrandKits(_Resource):
@@ -1162,6 +1247,140 @@ class _Subjects(_Resource):
         return self._c._get(f"/subjects/{_e(subject_id)}/consent")
 
 
+class _RightsLinks(_Resource):
+    def create(
+        self,
+        cbid: str,
+        *,
+        email: str,
+        user_id: Optional[str] = None,
+        rights: Optional[List[str]] = None,
+        ttl_seconds: Optional[int] = None,
+    ) -> _JSONDict:
+        """Mint a signed, single-use link to the hosted rights page for a person your backend
+        knows is signed in. The page locks their email and skips the code step. Show the
+        returned ``url`` only to that person. Needs ``dsar:write``. Returns ``{url, expiresAt}``."""
+        subject: Dict[str, Any] = {"email": email}
+        if user_id is not None:
+            subject["userId"] = user_id
+        body: Dict[str, Any] = {"subject": subject}
+        if rights is not None:
+            body["rights"] = list(rights)
+        if ttl_seconds is not None:
+            body["ttlSeconds"] = ttl_seconds
+        return self._c.request("POST", f"/sites/{_e(cbid)}/rights-links", body=body)
+
+
+def _captcha_body(mode: str, provider: Optional[str], site_key: Optional[str], secret: Optional[str], min_score: Optional[float]) -> _JSONDict:
+    body: _JSONDict = {"mode": mode}
+    if provider is not None:
+        body["provider"] = provider
+    if site_key is not None:
+        body["siteKey"] = site_key
+    if secret is not None:
+        body["secret"] = secret
+    if min_score is not None:
+        body["minScore"] = min_score
+    return body
+
+
+class _RightsCaptcha(_Resource):
+    """A site's rights-page captcha: your own Turnstile, hCaptcha or reCAPTCHA keys
+    (recommended), or off. A site without its own setting uses the organisation default
+    (``org.rights_captcha()``), else off. Cookie Munch's own captcha is never used on rights
+    pages. Requires sites:read / sites:write."""
+
+    def get(self, cbid: str) -> _JSONDict:
+        """The setting in force (``source``: site, org or default). Never the secret."""
+        return self._c._get(f"/sites/{_e(cbid)}/rights-captcha")
+
+    def set(
+        self,
+        cbid: str,
+        *,
+        mode: str,
+        provider: Optional[str] = None,
+        site_key: Optional[str] = None,
+        secret: Optional[str] = None,
+        min_score: Optional[float] = None,
+    ) -> _JSONDict:
+        """``mode="own"`` with ``provider`` (turnstile, hcaptcha, recaptcha_v2, recaptcha_v3),
+        ``site_key`` and ``secret`` (write-only; omit to keep the stored one) — the provider must
+        accept the secret before it is saved. ``min_score`` is for recaptcha_v3 (0.1-0.9).
+        ``mode="off"`` removes spam protection beyond the spam-trap field, the rate limits and
+        the email code."""
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/rights-captcha", body=_captcha_body(mode, provider, site_key, secret, min_score))
+
+    def remove(self, cbid: str) -> _JSONDict:
+        """Remove the site's own setting: it inherits the organisation default again. Returns
+        the setting now in force."""
+        return self._c.request("DELETE", f"/sites/{_e(cbid)}/rights-captcha")
+
+
+def _identity_body(
+    type: str,
+    issuer: str,
+    jwks_url: Optional[str],
+    audience: Optional[str],
+    authorized_parties: Optional[List[str]],
+    email_claim: Optional[str],
+    email_verified_claim: Optional[str],
+    session_cookie_name: Optional[str],
+    trust_email_claim: Optional[bool] = None,
+) -> _JSONDict:
+    body: _JSONDict = {"type": type, "issuer": issuer}
+    for key, value in (
+        ("jwksUrl", jwks_url),
+        ("audience", audience),
+        ("authorizedParties", authorized_parties),
+        ("emailClaim", email_claim),
+        ("emailVerifiedClaim", email_verified_claim),
+        ("sessionCookieName", session_cookie_name),
+        ("trustEmailClaim", trust_email_claim),
+    ):
+        if value is not None:
+            body[key] = value
+    return body
+
+
+class _RightsIdentity(_Resource):
+    """A site's sign-in provider (Clerk, Atlas or any JWKS issuer): a visitor signed in to your
+    site is verified by their session, with no code mail. A site without its own setting uses the
+    organisation default (``org.rights_identity()``). Requires sites:read / sites:write."""
+
+    def get(self, cbid: str) -> _JSONDict:
+        """The setting in force (``source``: site, org or default)."""
+        return self._c._get(f"/sites/{_e(cbid)}/rights-identity")
+
+    def set(
+        self,
+        cbid: str,
+        *,
+        type: str,
+        issuer: str,
+        jwks_url: Optional[str] = None,
+        audience: Optional[str] = None,
+        authorized_parties: Optional[List[str]] = None,
+        email_claim: Optional[str] = None,
+        email_verified_claim: Optional[str] = None,
+        session_cookie_name: Optional[str] = None,
+        trust_email_claim: Optional[bool] = None,
+    ) -> _JSONDict:
+        """``type`` is clerk, atlas or oidc_jwt; ``issuer`` exactly the token's ``iss``.
+        ``jwks_url`` is required for oidc_jwt (clerk/atlas: ``<issuer>/.well-known/jwks.json``);
+        ``authorized_parties`` (your own origins) is required for clerk and atlas. The JWKS is
+        fetched and checked before anything is saved; oidc_jwt needs ``audience`` or
+        ``authorized_parties``. The token must carry the email and a verified-email claim set to
+        true; ``trust_email_claim`` (clerk/atlas only) accepts a token without the verified claim."""
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/rights-identity", body=_identity_body(
+            type, issuer, jwks_url, audience, authorized_parties, email_claim, email_verified_claim, session_cookie_name,
+            trust_email_claim))
+
+    def remove(self, cbid: str) -> _JSONDict:
+        """Remove the site's own setting: it inherits the organisation default again."""
+        return self._c.request("DELETE", f"/sites/{_e(cbid)}/rights-identity")
+
+
 class _Org(_Resource):
     """The key's organisation. Requires an unscoped key that is not property-locked."""
 
@@ -1177,6 +1396,97 @@ class _Org(_Resource):
         if logo_url is not _UNSET:
             body["logoUrl"] = logo_url
         return t.from_dict(t.Org, self._c.request("PATCH", "/org", body=body))
+
+    def mail_provider(self) -> _JSONDict:
+        """Your own mail provider for rights-request mail. Never returns the credential, only
+        ``secretLast4``; ``sender`` says whether verification codes go through it now (``own``)
+        or are not mailed at all (``none``) — there is no shared sender."""
+        return self._c._get("/org/mail-provider")
+
+    def set_mail_provider(
+        self,
+        *,
+        provider: str,
+        from_email: str,
+        secret: Optional[str] = None,
+        from_name: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        ses: Optional[_JSONDict] = None,
+        smtp: Optional[_JSONDict] = None,
+    ) -> _JSONDict:
+        """Connect your own mail provider (recommended): ``brevo``, ``sendgrid``, ``postmark``,
+        ``resend``, ``ses`` (``ses={"region", "accessKeyId"}``) or ``smtp``
+        (``smtp={"host", "port", "security", "username"}``). Replaces the stored one. It carries
+        rights mail only after ``test_mail_provider`` succeeds. ``secret`` is write-only; omit
+        it to keep the stored one (same provider only)."""
+        body: _JSONDict = {"provider": provider, "fromEmail": from_email}
+        if from_name is not None:
+            body["fromName"] = from_name
+        if reply_to is not None:
+            body["replyTo"] = reply_to
+        if secret is not None:
+            body["secret"] = secret
+        if ses is not None:
+            body["ses"] = ses
+        if smtp is not None:
+            body["smtp"] = smtp
+        return self._c.request("PUT", "/org/mail-provider", body=body)
+
+    def test_mail_provider(self, to: Optional[str] = None) -> _JSONDict:
+        """Send a test through your provider. ``to`` defaults to the reply-to, else the from
+        address. A refusal comes back as ``ok: False`` with the provider's reason."""
+        return self._c.request("POST", "/org/mail-provider/test", body={"to": to} if to else {})
+
+    def remove_mail_provider(self) -> None:
+        """Remove your provider; no verification codes are mailed after this."""
+        self._c.request("DELETE", "/org/mail-provider")
+
+    def rights_captcha(self) -> _JSONDict:
+        """The default captcha for your rights pages (sites without their own). Never the secret."""
+        return self._c._get("/org/rights-captcha")
+
+    def set_rights_captcha(
+        self,
+        *,
+        mode: str,
+        provider: Optional[str] = None,
+        site_key: Optional[str] = None,
+        secret: Optional[str] = None,
+        min_score: Optional[float] = None,
+    ) -> _JSONDict:
+        """Set the default: ``own`` keys (recommended) or ``off``. Same fields as
+        ``rights_captcha.set``."""
+        return self._c.request("PUT", "/org/rights-captcha", body=_captcha_body(mode, provider, site_key, secret, min_score))
+
+    def remove_rights_captcha(self) -> _JSONDict:
+        """Remove the default: sites without their own setting have no captcha."""
+        return self._c.request("DELETE", "/org/rights-captcha")
+
+    def rights_identity(self) -> _JSONDict:
+        """The default sign-in provider rights requests are verified with (sites without their own)."""
+        return self._c._get("/org/rights-identity")
+
+    def set_rights_identity(
+        self,
+        *,
+        type: str,
+        issuer: str,
+        jwks_url: Optional[str] = None,
+        audience: Optional[str] = None,
+        authorized_parties: Optional[List[str]] = None,
+        email_claim: Optional[str] = None,
+        email_verified_claim: Optional[str] = None,
+        session_cookie_name: Optional[str] = None,
+        trust_email_claim: Optional[bool] = None,
+    ) -> _JSONDict:
+        """Set the default. Same fields as ``rights_identity.set``."""
+        return self._c.request("PUT", "/org/rights-identity", body=_identity_body(
+            type, issuer, jwks_url, audience, authorized_parties, email_claim, email_verified_claim, session_cookie_name,
+            trust_email_claim))
+
+    def remove_rights_identity(self) -> _JSONDict:
+        """Remove the default sign-in provider."""
+        return self._c.request("DELETE", "/org/rights-identity")
 
 
 class _Assets(_Resource):

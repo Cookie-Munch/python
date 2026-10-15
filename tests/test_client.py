@@ -71,6 +71,17 @@ class DryRunConfigTests(unittest.TestCase):
         self.assertEqual(tr.last["method"], "PUT")
 
 
+class LintConfigTests(unittest.TestCase):
+    def test_posts_to_lint_and_replace_adds_the_flag(self):
+        tr = RecordingTransport()
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.sites.lint_config("s1", {"banner": {"type": "accept-only"}})
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/sites/s1/config/lint")
+        cm.sites.lint_config("s1", {"v": 2}, replace=True)
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/sites/s1/config/lint?replace=1")
+
+
 class AuthHeaderTests(unittest.TestCase):
     def test_bearer_and_x_api_key_headers_are_sent(self):
         tr = RecordingTransport([_json_response({"orgId": "org_1", "plan": "pro", "keyPrefix": "fck_ab"})])
@@ -405,5 +416,56 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(days[0].countries, {"US": 5})
 
 
+
+class RightsPageTests(unittest.TestCase):
+    def test_dry_run_and_rollback(self):
+        tr = RecordingTransport()
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.rights_page.dry_run("s1", {"seo": {"title": "x"}})
+        self.assertEqual((tr.last["method"], tr.last["url"]), ("PATCH", "https://api.example.com/v1/sites/s1/rights-page?dryRun=1"))
+        cm.rights_page.dry_run("s1", {"v": 1}, replace=True)
+        self.assertEqual(tr.last["method"], "PUT")
+        cm.rights_page.rollback("s1", 2)
+        self.assertEqual(tr.last["url"], "https://api.example.com/v1/sites/s1/rights-page/rollback")
+        self.assertEqual(tr.last["body"], {"version": 2})
+
+    def test_publish_and_rollback_send_base_updated_at(self):
+        tr = RecordingTransport()
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.rights_page.publish("s1", base_updated_at=7)
+        self.assertEqual(tr.last["body"], {"baseUpdatedAt": 7})
+        cm.rights_page.publish("s1", base_updated_at=None)
+        self.assertEqual(tr.last["body"], {"baseUpdatedAt": None})
+        cm.rights_page.publish("s1")
+        self.assertEqual(tr.last["body"], {})
+        cm.rights_page.rollback("s1", 2, base_updated_at="2026-10-14T00:00:00.000Z")
+        self.assertEqual(tr.last["body"], {"version": 2, "baseUpdatedAt": "2026-10-14T00:00:00.000Z"})
+        cm.rights_page.rollback("s1", 2, base_updated_at=None)
+        self.assertEqual(tr.last["body"], {"version": 2, "baseUpdatedAt": None})
+
+    def test_patch_sends_none_as_null(self):
+        tr = RecordingTransport()
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.rights_page.patch("s1", {"customCss": None})
+        self.assertEqual(tr.last["body"], {"customCss": None})
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class RightsLinksTests(unittest.TestCase):
+    def test_create_sends_the_subject_and_options(self):
+        tr = RecordingTransport([_json_response({"url": "https://cookiemunch.net/r/s1?t=a.b", "expiresAt": 1})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        out = cm.rights_links.create("s1", email="p@x.com", user_id="u-1", rights=["access"], ttl_seconds=600)
+        self.assertEqual(out["url"], "https://cookiemunch.net/r/s1?t=a.b")
+        self.assertEqual(tr.last["method"], "POST")
+        self.assertTrue(tr.last["url"].endswith("/v1/sites/s1/rights-links"))
+        self.assertEqual(tr.last["body"], {"subject": {"email": "p@x.com", "userId": "u-1"}, "rights": ["access"], "ttlSeconds": 600})
+
+    def test_create_sends_only_what_was_given(self):
+        tr = RecordingTransport([_json_response({})])
+        cm = CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr)
+        cm.rights_links.create("s1", email="p@x.com")
+        self.assertEqual(tr.last["body"], {"subject": {"email": "p@x.com"}})
