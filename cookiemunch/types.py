@@ -131,10 +131,24 @@ class SiteCookie:
 
 @dataclass
 class ScanResult:
+    """A cookie scan's status (``GET /v1/sites/{cbid}/scan``)."""
+
     scan_id: Optional[str] = None
+    #: ``idle`` | ``scanning`` (kept for older clients; read ``state``).
     status: Optional[str] = None
+    #: ``queued`` | ``scanning`` | ``done`` | ``failed``. None when the site was never scanned.
+    state: Optional[str] = None
     started_at: Optional[int] = None
     finished_at: Optional[int] = None
+    duration_ms: Optional[int] = None
+    last_scanned_at: Optional[int] = None
+    #: Cookies this crawl saw; the stored list also keeps ``kept_from_earlier`` earlier finds.
+    cookie_count: Optional[int] = None
+    kept_from_earlier: Optional[int] = None
+    pages_visited: Optional[int] = None
+    #: Why it failed.
+    error: Optional[str] = None
+    button_parity: Optional[Dict[str, Any]] = None
     pages_scanned: Optional[int] = None
     cookies_found: Optional[int] = None
 

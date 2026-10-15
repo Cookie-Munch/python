@@ -235,3 +235,50 @@ class DeclaredCookiesTest(unittest.TestCase):
         rec = Recorder(status=204, body=b"")
         self.assertIsNone(client(rec).sites.undeclare_cookie("cb", "sid"))
         self.assertEqual(rec.calls[0]["url"], "https://api.example.com/v1/sites/cb/cookies/sid")
+
+
+class SequenceRecorder(Recorder):
+    """Answers each call with the next body in turn (the last one repeats)."""
+
+    def __init__(self, bodies: List[Dict[str, Any]]) -> None:
+        super().__init__()
+        self._bodies = bodies
+
+    def __call__(self, method, url, headers, body):
+        self.calls.append({"method": method, "url": url, "body": json.loads(body) if body else None})
+        i = min(len(self.calls) - 1, len(self._bodies) - 1)
+        return HttpResponse(status=200, headers={"Content-Type": "application/json"}, body=json.dumps(self._bodies[i]).encode())
+
+
+class RetireAndScanTest(unittest.TestCase):
+    def test_retire_and_unretire(self) -> None:
+        rec = Recorder()
+        c = client(rec)
+        c.sites.retire_cookie("cb", "old", renamed_to="new", note="v2")
+        c.sites.retire_cookie("cb", "atlas_*", dry_run=True)
+        out = c.sites.unretire_cookie("cb", "old", dry_run=True)
+        self.assertEqual((rec.calls[0]["method"], rec.calls[0]["url"]), ("POST", "https://api.example.com/v1/sites/cb/cookies/old/retire"))
+        self.assertEqual(rec.calls[0]["body"], {"renamedTo": "new", "note": "v2"})
+        self.assertEqual(rec.calls[1]["url"], "https://api.example.com/v1/sites/cb/cookies/atlas_%2A/retire?dryRun=1")
+        self.assertEqual(rec.calls[1]["body"], {})
+        self.assertEqual((rec.calls[2]["method"], rec.calls[2]["url"]), ("DELETE", "https://api.example.com/v1/sites/cb/cookies/old/retire?dryRun=1"))
+        self.assertEqual(out, {})
+        rec2 = Recorder(status=204, body=b"")
+        self.assertIsNone(client(rec2).sites.unretire_cookie("cb", "old"))
+
+    def test_scan_wait_and_the_new_status_fields(self) -> None:
+        rec = Recorder(body=json.dumps({"status": "idle", "state": "done", "scanId": "s1", "cookieCount": 3, "keptFromEarlier": 12, "pagesVisited": 5, "durationMs": 31000, "lastScannedAt": 9}).encode())
+        c = client(rec)
+        r = c.sites.scan("cb", wait=30)
+        c.sites.scan_status("cb", wait=5)
+        self.assertEqual(rec.calls[0]["url"], "https://api.example.com/v1/sites/cb/scan?wait=30")
+        self.assertEqual(rec.calls[1]["url"], "https://api.example.com/v1/sites/cb/scan?wait=5")
+        self.assertEqual((r.state, r.scan_id, r.cookie_count, r.kept_from_earlier, r.pages_visited, r.duration_ms), ("done", "s1", 3, 12, 5, 31000))
+
+    def test_wait_for_scan_long_polls_within_the_client_timeout(self) -> None:
+        rec = SequenceRecorder([{"status": "scanning", "state": "scanning"}, {"status": "idle", "state": "failed", "error": "timed out after 90 s"}])
+        r = client(rec).sites.wait_for_scan("cb", timeout_ms=120_000)
+        self.assertEqual((r.state, r.error), ("failed", "timed out after 90 s"))
+        self.assertEqual(len(rec.calls), 2)
+        # The default client timeout is 30 s, so it never asks the server to hold longer than that.
+        self.assertEqual(rec.calls[0]["url"], "https://api.example.com/v1/sites/cb/scan?wait=25")

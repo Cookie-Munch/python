@@ -35,6 +35,13 @@ _UNSET: Any = object()
 """Sentinel: distinguishes 'clear this field' (None) from 'leave it alone'."""
 
 
+def _num(v: Optional[float]) -> Optional[str]:
+    """A number for a query string: ``30`` not ``30.0``."""
+    if v is None:
+        return None
+    return str(int(v)) if float(v).is_integer() else str(round(float(v), 3))
+
+
 def _qs(params: Optional[Mapping[str, Any]]) -> str:
     if not params:
         return ""
@@ -363,11 +370,32 @@ class _Sites(_Resource):
     def cookies(self, cbid: str) -> List[t.SiteCookie]:
         return t.from_list(t.SiteCookie, self._c._get(f"/sites/{_e(cbid)}/cookies"))
 
-    def scan(self, cbid: str) -> t.ScanResult:
-        return t.from_dict(t.ScanResult, self._c.request("POST", f"/sites/{_e(cbid)}/scan"))
+    def scan(self, cbid: str, *, wait: Optional[float] = None) -> t.ScanResult:
+        """Start a cookie crawl: answers at once with ``scan_id`` and ``state="queued"``.
+        ``wait`` (seconds, at most 60) holds the request until it is done or failed."""
+        return t.from_dict(t.ScanResult, self._c.request("POST", f"/sites/{_e(cbid)}/scan{_qs({'wait': _num(wait)})}"))
 
-    def scan_status(self, cbid: str) -> t.ScanResult:
-        return t.from_dict(t.ScanResult, self._c._get(f"/sites/{_e(cbid)}/scan"))
+    def scan_status(self, cbid: str, *, wait: Optional[float] = None) -> t.ScanResult:
+        """The last scan: ``state``, timings, ``cookie_count``, ``pages_visited``, ``error``.
+        ``wait`` (seconds, at most 60) holds the request until a running scan settles."""
+        return t.from_dict(t.ScanResult, self._c._get(f"/sites/{_e(cbid)}/scan{_qs({'wait': _num(wait)})}"))
+
+    def wait_for_scan(self, cbid: str, *, timeout_ms: int = 120_000) -> t.ScanResult:
+        """Return once the site's scan is done or failed (read ``state`` and ``error``),
+        long-polling the server; at ``timeout_ms`` it returns the still-running state.
+        Each request asks the server to hold no longer than this client's own timeout."""
+        until = time.monotonic() + timeout_ms / 1000
+        while True:
+            left = until - time.monotonic()
+            asked = max(0.0, min(60.0, left, self._c._timeout - 5))
+            started = time.monotonic()
+            r = self.scan_status(cbid, wait=asked)
+            if r.status != "scanning" or until - time.monotonic() <= 0:
+                return r
+            # A server that answered sooner than asked is not hammered.
+            early = min(1.0, until - time.monotonic()) - (time.monotonic() - started)
+            if early > 0:
+                time.sleep(early)
 
     def ab(self, cbid: str) -> List[t.AbResult]:
         return t.from_list(t.AbResult, self._c._get(f"/sites/{_e(cbid)}/ab"))
@@ -441,6 +469,36 @@ class _Sites(_Resource):
             body["replace"] = True
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies{query}", body=body)
+
+    def retire_cookie(
+        self,
+        cbid: str,
+        name: str,
+        *,
+        renamed_to: Optional[str] = None,
+        note: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> _JSONDict:
+        """Retire a cookie the site renamed or stopped setting: it leaves the banner's
+        cookie list, ``data-cc="declaration"`` and the public feed, and stays listed for you
+        with ``retired``. A name ending in ``*`` retires every cookie with that prefix. If a
+        crawl or a visit sees it again afterwards it is listed again, flagged
+        ``review="retired_but_seen"``. ``dry_run=True`` stores nothing."""
+        body: _JSONDict = {}
+        if renamed_to is not None:
+            body["renamedTo"] = renamed_to
+        if note is not None:
+            body["note"] = note
+        query = _qs({"dryRun": "1" if dry_run else None})
+        return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/{_e(name)}/retire{query}", body=body)
+
+    def unretire_cookie(self, cbid: str, name: str, *, dry_run: bool = False) -> Optional[_JSONDict]:
+        """Un-retire a cookie: it is listed again everywhere. With ``dry_run=True`` nothing
+        is removed and the answer is the would-be list (``retired``)."""
+        if dry_run:
+            return self._c.request("DELETE", f"/sites/{_e(cbid)}/cookies/{_e(name)}/retire?dryRun=1")
+        self._c.request("DELETE", f"/sites/{_e(cbid)}/cookies/{_e(name)}/retire")
+        return None
 
     def undeclare_cookie(self, cbid: str, name: str, *, dry_run: bool = False) -> Optional[_JSONDict]:
         """Remove a declaration; the scanned classification applies again. With
