@@ -407,28 +407,48 @@ class _Sites(_Resource):
         expiry: Optional[str] = None,
         domain: Optional[str] = None,
         pattern: Optional[bool] = None,
+        purposes: Optional[Dict[str, str]] = None,
+        dry_run: bool = False,
     ) -> _JSONDict:
         """Declare what one cookie is. Overrides scanned, observed and database
         classification everywhere (API, preference modal, ``data-cc="declaration"``).
         A name ending in ``*`` (or ``pattern=True``) declares a prefix wildcard.
-        ``category`` is a standard category or one of the site's custom category ids."""
+        ``category`` is a standard category or one of the site's custom category ids.
+        ``purposes`` is the purpose in other languages (``{"es": "…", "pt-BR": "…"}``);
+        ``purpose`` is the fallback. ``dry_run=True`` stores nothing and answers with the
+        would-be list (``declared``) and a ``diff``."""
         body: _JSONDict = {"category": category, "purpose": purpose}
-        for key, value in (("provider", provider), ("expiry", expiry), ("domain", domain), ("pattern", pattern)):
+        for key, value in (
+            ("provider", provider),
+            ("expiry", expiry),
+            ("domain", domain),
+            ("pattern", pattern),
+            ("purposes", purposes),
+        ):
             if value is not None:
                 body[key] = value
-        return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/{_e(name)}", body=body)
+        query = _qs({"dryRun": "1" if dry_run else None})
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/{_e(name)}{query}", body=body)
 
-    def declare_cookies(self, cbid: str, cookies: List[_JSONDict], *, replace: bool = False) -> _JSONDict:
-        """Declare many cookies at once (each ``{name, category, purpose, ...}``).
-        All-or-nothing; ``replace=True`` also removes declarations the list does not name."""
+    def declare_cookies(
+        self, cbid: str, cookies: List[_JSONDict], *, replace: bool = False, dry_run: bool = False
+    ) -> _JSONDict:
+        """Declare many cookies at once (each ``{name, category, purpose, purposes?, ...}``).
+        All-or-nothing; ``replace=True`` also removes declarations the list does not name.
+        ``dry_run=True`` stores nothing and answers with what would be, plus a ``diff``."""
         body: _JSONDict = {"cookies": cookies}
         if replace:
             body["replace"] = True
-        return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies", body=body)
+        query = _qs({"dryRun": "1" if dry_run else None})
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies{query}", body=body)
 
-    def undeclare_cookie(self, cbid: str, name: str) -> None:
-        """Remove a declaration; the scanned classification applies again."""
+    def undeclare_cookie(self, cbid: str, name: str, *, dry_run: bool = False) -> Optional[_JSONDict]:
+        """Remove a declaration; the scanned classification applies again. With
+        ``dry_run=True`` nothing is removed and the answer is the would-be list and a ``diff``."""
+        if dry_run:
+            return self._c.request("DELETE", f"/sites/{_e(cbid)}/cookies/{_e(name)}?dryRun=1")
         self._c.request("DELETE", f"/sites/{_e(cbid)}/cookies/{_e(name)}")
+        return None
 
     def policy(
         self,
@@ -1145,12 +1165,19 @@ class _Fulfillment(_Resource):
         profile: Mapping[str, object],
         webhook_secret: Optional[str] = None,
         auto: Optional[bool] = None,
+        dry_run: bool = False,
     ) -> _JSONDict:
         """POST /v1/dsar/executors — connect a system that runs part of a rights request.
 
         ``profile`` describes that system's API — paths, the words it uses for export and
         erase, its status vocabulary, how it signs webhooks — so connecting a new platform
         needs no code. The secret is stored encrypted and never returned.
+
+        ``dry_run=True`` (``?dryRun=1``) validates everything and returns
+        ``{"dryRun": True, "executor": ..., "diff": [...]}`` without storing anything.
+        A ``whsec_<base64>`` webhook secret verifies deliveries signed with its
+        base64-decoded bytes or with the literal string; any other secret only with its
+        UTF-8 bytes.
         """
         body: _JSONDict = {
             "system": system,
@@ -1162,7 +1189,7 @@ class _Fulfillment(_Resource):
             body["webhookSecret"] = webhook_secret
         if auto is not None:
             body["auto"] = auto
-        return self._c.request("POST", "/dsar/executors", body=body)
+        return self._c.request("POST", "/dsar/executors" + ("?dryRun=1" if dry_run else ""), body=body)
 
     def update_executor(
         self,
@@ -1173,11 +1200,13 @@ class _Fulfillment(_Resource):
         secret_key: Optional[str] = None,
         webhook_secret: Any = _UNSET,
         auto: Optional[bool] = None,
+        dry_run: bool = False,
     ) -> _JSONDict:
         """PATCH /v1/dsar/executors/{id} — change a connection in place.
 
         Only what you pass changes; the stored credential is kept unless ``secret_key`` is
-        given. ``webhook_secret=None`` removes the webhook secret.
+        given. ``webhook_secret=None`` removes the webhook secret. ``dry_run=True``
+        (``?dryRun=1``) returns the would-be connection and a diff, and changes nothing.
         """
         body: _JSONDict = {}
         if profile is not None:
@@ -1190,7 +1219,19 @@ class _Fulfillment(_Resource):
             body["webhookSecret"] = webhook_secret
         if auto is not None:
             body["auto"] = auto
-        return self._c.request("PATCH", f"/dsar/executors/{_e(id)}", body=body)
+        return self._c.request("PATCH", f"/dsar/executors/{_e(id)}" + ("?dryRun=1" if dry_run else ""), body=body)
+
+    def test_executor_webhook(self, id: str, headers: Mapping[str, str], body: str) -> _JSONDict:
+        """POST /v1/dsar/executors/{id}/webhook/test — would this delivery verify?
+
+        Runs the receiver's exact check on ``headers`` and the raw ``body`` string (the
+        bytes that were signed) and acts on nothing. Returns ``{verified, stage, reason}``.
+        """
+        return self._c.request("POST", f"/dsar/executors/{_e(id)}/webhook/test", body={"headers": dict(headers), "body": body})
+
+    def executor_webhook_deliveries(self, id: str) -> List[_JSONDict]:
+        """GET /v1/dsar/executors/{id}/webhook/deliveries — the last 50, each with its reason."""
+        return self._c._get(f"/dsar/executors/{_e(id)}/webhook/deliveries")
 
     def disconnect_executor(self, id: str) -> None:
         """DELETE /v1/dsar/executors/{id}."""

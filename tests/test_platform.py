@@ -189,3 +189,49 @@ class RightsIdentityTest(unittest.TestCase):
         )
         self.assertEqual(rec.calls[1]["body"], {"type": "clerk", "issuer": "https://clerk.acme.example", "authorizedParties": ["https://www.acme.example"], "trustEmailClaim": True})
         self.assertEqual(rec.calls[4]["body"], {"type": "oidc_jwt", "issuer": "https://id.acme.example", "jwksUrl": "https://id.acme.example/keys", "audience": "acme-rights", "sessionCookieName": "sid"})
+
+
+class ExecutorWebhookTest(unittest.TestCase):
+    def test_webhook_check_deliveries_and_dry_runs(self) -> None:
+        rec = Recorder()
+        c = client(rec)
+        c.fulfillment.test_executor_webhook("ex 1", {"x-sig": "v1,abc"}, '{"a":1}')
+        c.fulfillment.executor_webhook_deliveries("ex 1")
+        c.fulfillment.connect_executor("crm", "https://crm.example", "sk_12345678", {"open": {}}, dry_run=True)
+        c.fulfillment.update_executor("ex 1", auto=False, dry_run=True)
+        c.fulfillment.update_executor("ex 1", auto=False)
+        self.assertEqual(
+            [(x["method"], x["url"]) for x in rec.calls],
+            [
+                ("POST", "https://api.example.com/v1/dsar/executors/ex%201/webhook/test"),
+                ("GET", "https://api.example.com/v1/dsar/executors/ex%201/webhook/deliveries"),
+                ("POST", "https://api.example.com/v1/dsar/executors?dryRun=1"),
+                ("PATCH", "https://api.example.com/v1/dsar/executors/ex%201?dryRun=1"),
+                ("PATCH", "https://api.example.com/v1/dsar/executors/ex%201"),
+            ],
+        )
+        self.assertEqual(rec.calls[0]["body"], {"headers": {"x-sig": "v1,abc"}, "body": '{"a":1}'})
+
+
+class DeclaredCookiesTest(unittest.TestCase):
+    """Numestri F-01: per-language purposes, and dry_run on every declaration write."""
+
+    def test_purposes_and_dry_run(self) -> None:
+        rec = Recorder()
+        c = client(rec)
+        c.sites.declare_cookie("cb", "sid", "necessary", "Signed in.", purposes={"es": "Sesión."})
+        c.sites.declare_cookie("cb", "sid", "necessary", "Signed in.", dry_run=True)
+        c.sites.declare_cookies("cb", [{"name": "a", "category": "necessary", "purpose": "A"}], replace=True, dry_run=True)
+        out = c.sites.undeclare_cookie("cb", "sid", dry_run=True)
+        self.assertEqual(rec.calls[0]["url"], "https://api.example.com/v1/sites/cb/cookies/sid")
+        self.assertEqual(rec.calls[0]["body"], {"category": "necessary", "purpose": "Signed in.", "purposes": {"es": "Sesión."}})
+        self.assertEqual(rec.calls[1]["url"], "https://api.example.com/v1/sites/cb/cookies/sid?dryRun=1")
+        self.assertEqual(rec.calls[2]["url"], "https://api.example.com/v1/sites/cb/cookies?dryRun=1")
+        self.assertEqual(rec.calls[2]["body"]["replace"], True)
+        self.assertEqual((rec.calls[3]["method"], rec.calls[3]["url"]), ("DELETE", "https://api.example.com/v1/sites/cb/cookies/sid?dryRun=1"))
+        self.assertEqual(out, {})
+
+    def test_undeclare_without_dry_run_returns_none(self) -> None:
+        rec = Recorder(status=204, body=b"")
+        self.assertIsNone(client(rec).sites.undeclare_cookie("cb", "sid"))
+        self.assertEqual(rec.calls[0]["url"], "https://api.example.com/v1/sites/cb/cookies/sid")
