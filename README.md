@@ -116,6 +116,8 @@ cm = CookieMunch(api_key="fck_test", transport=fake)
 - **Rights-page captcha** — `rights_captcha.get`, `set`, `remove` per site; the org default via `org.rights_captcha`, `set_rights_captcha`, `remove_rights_captcha`
 - **Sign-in verification for rights requests** — `rights_identity.get`, `set(cbid, type=, issuer=, jwks_url=, audience=, authorized_parties=, email_claim=, email_verified_claim=, session_cookie_name=)`, `remove` per site; the org default via `org.rights_identity`, `set_rights_identity`, `remove_rights_identity`. Connect Clerk, Atlas or any JWKS issuer (`oidc_jwt`): a signed-in visitor is verified by their session, with no code mail
 - **Resellers** — `reseller`
+- **Key hygiene and strict writes** — `keys.report(unused_days=, expiring_days=)`, `keys.issue(expires_at=)`, `keys.update(prefix, expires_at=None)` removes an expiry; `CookieMunch(..., strict_unknown_fields=True)` sends `Prefer: strict-unknown-fields` so a mistyped field is refused (`unknown_field`)
+- **Site identity and integrations** — `sites.update(cbid, domain=, name=, aliases=, dry_run=)` (rename or move a site; the cbid and consent ledger stay), `integration_health(cbid=None)`, `provision(input, dry_run=False)` (one-call wiring; no secret returned), `sites.list_partners`, `link_partner`, `unlink_partner` (partner links, no secret)
 
 Every operation of the `/v1` Developer API is reachable. `tests/test_parity.py` checks
 that against `sdks/operations.json`, which is generated from the server's OpenAPI

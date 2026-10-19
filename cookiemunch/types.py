@@ -272,6 +272,9 @@ class ApiKey:
     name: Optional[str] = None
     created_at: Optional[int] = None
     last_used_at: Optional[int] = None
+    expires_at: Optional[int] = None
+    scopes: Optional[List[str]] = None
+    cbids: Optional[List[str]] = None
     # Present only in the response that first issues the key.
     secret: Optional[str] = None
 
