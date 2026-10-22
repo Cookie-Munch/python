@@ -61,6 +61,7 @@ class CookieMunch:
         transport: Optional injectable HTTP transport (for tests / custom runtimes).
             Defaults to a stdlib ``urllib`` transport.
         timeout: Request timeout in seconds (applies to the default transport).
+        user_agent: The ``User-Agent`` sent on every request. Default ``cookiemunch-python/<version>``.
     """
 
     def __init__(
@@ -71,10 +72,13 @@ class CookieMunch:
         transport: Optional[Transport] = None,
         timeout: float = 30.0,
         strict_unknown_fields: bool = False,
+        user_agent: Optional[str] = None,
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
         self.api_key = api_key
+        # Default ``cookiemunch-python/<version>``: the edge refuses a request with no real User-Agent.
+        self.user_agent = user_agent or f"cookiemunch-python/{_SDK_VERSION}"
         # Send ``Prefer: strict-unknown-fields`` on writes: an undeclared body field is refused
         # (400 ``unknown_field``) instead of ignored.
         self.strict_unknown_fields = strict_unknown_fields
@@ -125,7 +129,7 @@ class CookieMunch:
             "Accept": "application/json",
             # urllib's default "Python-urllib/3.x" is refused at the API's edge with a bare
             # 403 "error code: 1010" (CMN-14), so every call from the default transport failed.
-            "User-Agent": f"cookiemunch-python/{_SDK_VERSION}",
+            "User-Agent": self.user_agent,
         }
         if extra:
             headers.update(extra)
@@ -570,7 +574,7 @@ class _Sites(_Resource):
         return None
 
     def cookie_presets(self, cbid: str) -> _JSONDict:
-        """Every declaration preset (atlas, forumulate, chatly, cookiemunch): its parameters,
+        """Every declaration preset (atlas, forumulate, chatly, cookiemunch, referally): its parameters,
         what it has declared on this site, and whether the vendor's manifest exists yet."""
         return self._c.request("GET", f"/sites/{_e(cbid)}/cookies/presets")
 
@@ -579,7 +583,7 @@ class _Sites(_Resource):
     ) -> _JSONDict:
         """Apply (or re-sync) a vendor preset: declares what that platform writes, marked
         ``vendor``. Atlas takes ``{"frontendApiHost", "crossSubdomainCookies"}``; Chatly
-        ``{"publicId", "dragging", "category"}``. Names you declared are kept (``skipped``)."""
+        ``{"publicId", "dragging", "category"}``; Referally ``{"cookieDomain", "cookieDays", "category"}``. Names you declared are kept (``skipped``)."""
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/presets/{_e(vendor)}{query}", body=params or {})
 

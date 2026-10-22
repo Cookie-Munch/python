@@ -60,6 +60,18 @@ class UserAgentTests(unittest.TestCase):
         self.assertTrue(tr.last["headers"]["User-Agent"].startswith("cookiemunch-python/"))
 
 
+class UserAgentOverrideTests(unittest.TestCase):
+    def test_default_names_sdk_and_version(self):
+        tr = RecordingTransport([_json_response({})])
+        CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr).me()
+        self.assertEqual(tr.last["headers"]["User-Agent"], "cookiemunch-python/0.1.0")
+
+    def test_caller_can_override(self):
+        tr = RecordingTransport([_json_response({})])
+        CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=tr, user_agent="acme/2").me()
+        self.assertEqual(tr.last["headers"]["User-Agent"], "acme/2")
+
+
 class DryRunConfigTests(unittest.TestCase):
     def test_patch_and_put_previews(self):
         tr = RecordingTransport()
