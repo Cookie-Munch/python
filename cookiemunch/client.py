@@ -98,6 +98,7 @@ class CookieMunch:
         self.brand_kits = _BrandKits(self)
         self.rights_page = _RightsPage(self)
         self.preferences = _Preferences(self)
+        self.preference_center = _PreferenceCenter(self)
         self.members = _Members(self)
         self.keys = _Keys(self)
         self.webhooks = _Webhooks(self)
@@ -116,6 +117,7 @@ class CookieMunch:
         self.subjects = _Subjects(self)
         self.rights_links = _RightsLinks(self)
         self.rights_captcha = _RightsCaptcha(self)
+        self.consent_sync_secret = _ConsentSyncSecret(self)
         self.rights_identity = _RightsIdentity(self)
         self.org = _Org(self)
         self.assets = _Assets(self)
@@ -958,6 +960,33 @@ class _Preferences(_Resource):
         return self._c._get(f"/preferences/{_e(subject_id)}")
 
 
+class _PreferenceCenter(_Resource):
+    """The hosted preference centre, opened for a visitor your server has signed in."""
+
+    def mint_token(
+        self,
+        cbid: str,
+        *,
+        email: Optional[str] = None,
+        subject_id: Optional[str] = None,
+        ttl_seconds: Optional[int] = None,
+    ) -> _JSONDict:
+        """Mint a preference-centre token for the page to pass to
+        ``CookieMunch.setSubjectToken``. Give exactly one of ``email`` (resolved as the emailed
+        preference link resolves it) or ``subject_id``. ``ttl_seconds`` defaults to 3600, at most
+        86400. The token is a credential: never put it in a shared URL or a log. Needs
+        subscriptions:write and profile:write, plus identity:read by email.
+        Returns ``{token, expiresAt}``."""
+        body: Dict[str, Any] = {"cbid": cbid}
+        if email is not None:
+            body["email"] = email
+        if subject_id is not None:
+            body["subjectId"] = subject_id
+        if ttl_seconds is not None:
+            body["ttlSeconds"] = ttl_seconds
+        return self._c.request("POST", "/preference-center/tokens", body=body)
+
+
 class _Members(_Resource):
     def list(self) -> List[t.Member]:
         return t.from_list(t.Member, self._c._get("/members"))
@@ -1584,6 +1613,25 @@ def _captcha_body(mode: str, provider: Optional[str], site_key: Optional[str], s
     return body
 
 
+class _ConsentSyncSecret(_Resource):
+    """A site's consent-sync signing secret. Your server signs consent-sync tokens with it so a
+    signed-in visitor's consent decision follows them across browsers (hosted consent sync).
+    Reading needs sites:read; ``rotate`` and ``remove`` need sites:write and consent:write."""
+
+    def get(self, cbid: str) -> _JSONDict:
+        """Whether it is set up: ``configured``, ``secretLast4``, ``createdAt``. Never the secret."""
+        return self._c._get(f"/sites/{_e(cbid)}/consent-sync-secret")
+
+    def rotate(self, cbid: str) -> _JSONDict:
+        """Mint the secret, or replace it (the old one stops at once). The answer's ``secret``
+        is shown this once: keep it on your server, never in a page."""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/consent-sync-secret")
+
+    def remove(self, cbid: str) -> _JSONDict:
+        """Remove it: hosted consent sync stops for the site."""
+        return self._c.request("DELETE", f"/sites/{_e(cbid)}/consent-sync-secret")
+
+
 class _RightsCaptcha(_Resource):
     """A site's rights-page captcha: your own Turnstile, hCaptcha or reCAPTCHA keys
     (recommended), or off. A site without its own setting uses the organisation default
@@ -1696,6 +1744,34 @@ class _Org(_Resource):
         if logo_url is not _UNSET:
             body["logoUrl"] = logo_url
         return t.from_dict(t.Org, self._c.request("PATCH", "/org", body=body))
+
+    def controller(self) -> _JSONDict:
+        """Your organisation's own data-controller identity: who every rights notice names, before
+        any site config ``controller`` block. ``{"set": False}`` when there is none."""
+        return self._c._get("/org/controller")
+
+    def set_controller(
+        self,
+        *,
+        legal_name: str,
+        contact_email: Optional[str] = None,
+        address: Optional[str] = None,
+        dpo_contact: Optional[str] = None,
+    ) -> _JSONDict:
+        """Set the organisation's data-controller identity. Replaces it: a field left out is
+        removed. Needs an unscoped key or ``rights:write``."""
+        body: _JSONDict = {"legalName": legal_name}
+        if contact_email is not None:
+            body["contactEmail"] = contact_email
+        if address is not None:
+            body["address"] = address
+        if dpo_contact is not None:
+            body["dpoContact"] = dpo_contact
+        return self._c.request("PUT", "/org/controller", body=body)
+
+    def remove_controller(self) -> None:
+        """Remove the identity; notices then name the site config ``controller`` block."""
+        self._c.request("DELETE", "/org/controller")
 
     def mail_provider(self) -> _JSONDict:
         """Your own mail provider for rights-request mail. Never returns the credential, only

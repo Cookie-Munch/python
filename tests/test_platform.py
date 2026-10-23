@@ -93,6 +93,28 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class OrgControllerTest(unittest.TestCase):
+    def test_get_set_remove(self) -> None:
+        rec = Recorder()
+        c = client(rec)
+        c.org.controller()
+        c.org.set_controller(legal_name="Crossly Ltd", contact_email="p@crossly.example", dpo_contact="dpo@crossly.example")
+        rec._response = rec._response.__class__(status=204, headers={}, body=b"")
+        c.org.remove_controller()
+        self.assertEqual(
+            [(x["method"], x["url"]) for x in rec.calls],
+            [
+                ("GET", "https://api.example.com/v1/org/controller"),
+                ("PUT", "https://api.example.com/v1/org/controller"),
+                ("DELETE", "https://api.example.com/v1/org/controller"),
+            ],
+        )
+        self.assertEqual(
+            rec.calls[1]["body"],
+            {"legalName": "Crossly Ltd", "contactEmail": "p@crossly.example", "dpoContact": "dpo@crossly.example"},
+        )
+
+
 class OrgMailProviderTest(unittest.TestCase):
     def test_get_set_test_remove(self) -> None:
         rec = Recorder()
@@ -139,6 +161,39 @@ class RightsPageDomainsTest(unittest.TestCase):
         self.assertEqual(rec.calls[1]["body"], {"hostname": "privacy.acme.com"})
         self.assertEqual(rec.calls[2]["url"], f"{base}/s/rights-page/domains/datenschutz.b%C3%BCcher.de/verify")
         self.assertEqual(rec.calls[3]["url"], f"{base}/s/rights-page/domains/privacy.acme.com")
+
+
+class ConsentSyncSecretTest(unittest.TestCase):
+    def test_get_rotate_remove(self) -> None:
+        rec = Recorder()
+        c = client(rec)
+        c.consent_sync_secret.get("s 1")
+        c.consent_sync_secret.rotate("s1")
+        c.consent_sync_secret.remove("s1")
+        self.assertEqual(
+            [(x["method"], x["url"]) for x in rec.calls],
+            [
+                ("GET", "https://api.example.com/v1/sites/s%201/consent-sync-secret"),
+                ("POST", "https://api.example.com/v1/sites/s1/consent-sync-secret"),
+                ("DELETE", "https://api.example.com/v1/sites/s1/consent-sync-secret"),
+            ],
+        )
+
+
+class PreferenceCenterTest(unittest.TestCase):
+    def test_mint_token_sends_only_what_is_given(self) -> None:
+        rec = Recorder(body=b'{"token":"t","expiresAt":"2026-01-01T00:00:00.000Z"}', status=201)
+        c = client(rec)
+        out = c.preference_center.mint_token("cb1", email="a@x.com")
+        c.preference_center.mint_token("cb1", subject_id="u1", ttl_seconds=60)
+        self.assertEqual(out["token"], "t")
+        self.assertEqual(
+            [(x["method"], x["url"], x["body"]) for x in rec.calls],
+            [
+                ("POST", "https://api.example.com/v1/preference-center/tokens", {"cbid": "cb1", "email": "a@x.com"}),
+                ("POST", "https://api.example.com/v1/preference-center/tokens", {"cbid": "cb1", "subjectId": "u1", "ttlSeconds": 60}),
+            ],
+        )
 
 
 class RightsCaptchaTest(unittest.TestCase):
