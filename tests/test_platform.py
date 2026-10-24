@@ -276,6 +276,7 @@ class ExecutorPresetTest(unittest.TestCase):
         c.fulfillment.connect_executor_preset("forumulate", "fck_12345678", org_id="org-1")
         c.fulfillment.test_executor("ex 1", canary=True)
         c.fulfillment.upgrade_executor_preset("ex 1", atlas_id_app_id="app_1", dry_run=True)
+        c.fulfillment.executor("ex 1")
         self.assertEqual(
             [(x["method"], x["url"]) for x in rec.calls],
             [
@@ -283,6 +284,7 @@ class ExecutorPresetTest(unittest.TestCase):
                 ("POST", "https://api.example.com/v1/dsar/executors"),
                 ("POST", "https://api.example.com/v1/dsar/executors/ex%201/test"),
                 ("POST", "https://api.example.com/v1/dsar/executors/ex%201/upgrade-preset?dryRun=1"),
+                ("GET", "https://api.example.com/v1/dsar/executors/ex%201"),
             ],
         )
         self.assertEqual(rec.calls[1]["body"], {"preset": "forumulate", "secretKey": "fck_12345678", "orgId": "org-1"})

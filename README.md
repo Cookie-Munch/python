@@ -104,7 +104,7 @@ cm = CookieMunch(api_key="fck_test", transport=fake)
 
 ## Resource surface
 
-`me()`, `usage()`, `audit(limit=None)`, `log_consent(...)`, plus:
+`me()`, `usage()`, `entitlements()`, `audit(limit=None)`, `log_consent(...)`, plus:
 
 - **Consent platform** — `sites` · `consent` · `dsar` · `vendors` · `ropa` · `brand_kits` ·
   `preferences` · `members` · `keys` · `webhooks` · `banners` · `org` · `assets`

@@ -16,7 +16,7 @@ import json as _json
 import time
 import urllib.parse
 import uuid
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 from . import types as t
 from ._transport import HttpResponse, Transport, urllib_transport
@@ -40,6 +40,13 @@ def _num(v: Optional[float]) -> Optional[str]:
     if v is None:
         return None
     return str(int(v)) if float(v).is_integer() else str(round(float(v), 3))
+
+
+def _meta_qs(metadata: Optional[Mapping[str, str]]) -> str:
+    """``?metadata[k]=v`` tag filters for list endpoints."""
+    if not metadata:
+        return ""
+    return "?" + "&".join(f"metadata%5B{urllib.parse.quote(str(k), safe='')}%5D={urllib.parse.quote(str(v), safe='')}" for k, v in metadata.items())
 
 
 def _qs(params: Optional[Mapping[str, Any]]) -> str:
@@ -73,6 +80,8 @@ class CookieMunch:
         timeout: float = 30.0,
         strict_unknown_fields: bool = False,
         user_agent: Optional[str] = None,
+        secret_recipient: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
@@ -82,6 +91,10 @@ class CookieMunch:
         # Send ``Prefer: strict-unknown-fields`` on writes: an undeclared body field is refused
         # (400 ``unknown_field``) instead of ignored.
         self.strict_unknown_fields = strict_unknown_fields
+        # ``x25519:<base64 public key>``: once-shown secrets come back sealed (``sealed_secret``).
+        self.secret_recipient = secret_recipient
+        # Extra headers on every request, e.g. ``{"Idempotency-Key": "<ref>:<run>"}`` for one create.
+        self.extra_headers = dict(headers or {})
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout
         if transport is not None:
@@ -119,8 +132,12 @@ class CookieMunch:
         self.rights_captcha = _RightsCaptcha(self)
         self.consent_sync_secret = _ConsentSyncSecret(self)
         self.rights_identity = _RightsIdentity(self)
+        self.dsar_settings = _DsarSettings(self)
+        self.integrations = _Integrations(self)
         self.org = _Org(self)
         self.assets = _Assets(self)
+        self.metadata = _Metadata(self)
+        self.partner_links = _PartnerLinks(self)
 
     # -- transport ---------------------------------------------------------
 
@@ -133,6 +150,7 @@ class CookieMunch:
             # 403 "error code: 1010" (CMN-14), so every call from the default transport failed.
             "User-Agent": self.user_agent,
         }
+        headers.update(self.extra_headers)
         if extra:
             headers.update(extra)
         return headers
@@ -157,6 +175,8 @@ class CookieMunch:
         hdrs = self._headers(headers)
         if self.strict_unknown_fields and method.upper() != "GET":
             hdrs["Prefer"] = "strict-unknown-fields"
+        if self.secret_recipient and method.upper() != "GET":
+            hdrs["X-Secret-Recipient"] = self.secret_recipient
         data: Optional[bytes] = None
         if body is not None:
             hdrs["Content-Type"] = "application/json"
@@ -202,7 +222,7 @@ class CookieMunch:
         """GET /v1/me — identity for SDK bootstrapping."""
         return t.from_dict(t.Identity, self._get("/me"))
 
-    def list_orgs(self) -> _JSONDict:
+    def list_orgs(self, metadata: Optional[Mapping[str, str]] = None) -> _JSONDict:
         """GET /v1/orgs — every organisation on this key's account.
 
         Each carries its effective ``plan``, ``planSource`` (``org`` = its own subscription,
@@ -210,9 +230,19 @@ class CookieMunch:
         ``subscribedPlan``; the response also has ``orgLimit`` (``max``/``plan``/``used``) and
         ``upgradeUrl``. Needs an unscoped key that is not locked to properties.
         """
-        return self._get("/orgs")
+        return self._get(f"/orgs{_meta_qs(metadata)}")
 
-    def create_org(self, name: str) -> _JSONDict:
+    def create_org(
+        self,
+        name: str,
+        *,
+        mint_key: bool = False,
+        key_scopes: Optional[List[str]] = None,
+        key_expires_in_days: Optional[int] = None,
+        key_owner: Optional[str] = None,
+        external_ref: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> _JSONDict:
         """POST /v1/orgs — create a sibling organisation owned by the same account.
 
         For starting a separate business of your own. Needs an unscoped key, and counts
@@ -220,7 +250,30 @@ class CookieMunch:
         not reseller provisioning: ``/v1/reseller/customers`` is for organisations you run on
         behalf of YOUR customers.
         """
-        return self.request("POST", "/orgs", body={"name": name})
+        body: _JSONDict = {"name": name}
+        if mint_key:
+            body["mintKey"] = True
+        if key_scopes is not None:
+            body["keyScopes"] = list(key_scopes)
+        if key_expires_in_days is not None:
+            body["keyExpiresInDays"] = key_expires_in_days
+        if key_owner is not None:
+            body["keyOwner"] = key_owner
+        if external_ref is not None:
+            body["externalRef"] = external_ref
+        if metadata is not None:
+            body["metadata"] = dict(metadata)
+        return self.request("POST", "/orgs", body=body)
+
+    def delete_sandbox_org(self, id: str) -> _JSONDict:
+        """DELETE /v1/orgs/{id}?hard=1 — remove a SANDBOX organisation of this account (created with
+        ``metadata.forgedeck_sandbox``). Anything else is 403 ``not_a_sandbox``."""
+        return self.request("DELETE", f"/orgs/{_e(id)}?hard=1")
+
+    def provision_env(self, ref: str) -> _JSONDict:
+        """GET /v1/provision/env — what ``forgedeck env`` writes for the product provisioned with
+        this forgedeck ref: names, non-secret values, and references for secrets."""
+        return self._get(f"/provision/env{_qs({'ref': ref})}")
 
     def languages(self) -> List[t.SupportedLanguage]:
         """GET /v1/languages — the languages the banner already speaks.
@@ -234,22 +287,61 @@ class CookieMunch:
         """GET /v1/usage — current resource usage for the org."""
         return t.from_dict(t.Usage, self._get("/usage"))
 
+    def entitlements(self) -> _JSONDict:
+        """GET /v1/entitlements — what the org may use, from its plan: every feature as
+        ``{key, enabled}`` and every limit as ``limits.<name>`` with ``limit`` (None = unlimited)
+        and ``used`` where metered. Any key may read it."""
+        return self._get("/entitlements")
+
     def integration_health(self, cbid: Optional[str] = None) -> _JSONDict:
         """GET /v1/integration-health — one row per link the site's privacy wiring depends on,
         each with ``ok`` (``None`` = could not check) and a ``fixHint``. ``cbid`` may be omitted
         when the org has one site."""
         return self._get(f"/integration-health{_qs({'cbid': cbid})}")
 
-    def provision(self, input: Mapping[str, Any], dry_run: bool = False) -> _JSONDict:
+    def embed_manifest(self, cbid: str) -> _JSONDict:
+        """GET /v1/embed?cbid= — the site's embed manifest (the tenant variant of
+        ``/.well-known/forgedeck-embed.json``): every origin by CSP directive and every browser key
+        the embed writes for this site's config. Public: no key is needed."""
+        return self._get(f"/embed{_qs({'cbid': cbid})}")
+
+    def provision(self, input: Mapping[str, Any], dry_run: bool = False, from_step: Optional[str] = None) -> _JSONDict:
         """POST /v1/provision — wire a product's privacy in one call (site, connected systems,
         Atlas, Forumulate). Idempotent; ``dry_run=True`` writes nothing anywhere. The Atlas key and
         Forumulate token in ``input`` are used for this request only; no secret is returned."""
-        return self.request("POST", f"/provision{_qs({'dryRun': '1' if dry_run else None})}", body=dict(input))
+        return self.request("POST", f"/provision{_qs({'dryRun': '1' if dry_run else None, 'fromStep': from_step})}", body=dict(input))
 
-    def audit(self, limit: Optional[int] = None) -> _JSONDict:
+    def audit(self, limit: Optional[int] = None, actor: Optional[str] = None) -> _JSONDict:
         """GET /v1/audit — the org's audit log, newest first. API actions appear as
-        ``apikey:<prefix>``. Requires an unscoped key that is not property-locked."""
-        return self._get(f"/audit{_qs({'limit': limit})}")
+        ``apikey:<prefix>``. Requires an unscoped key, except ``actor="self"`` (this key's
+        own rows), which any key may read."""
+        return self._get(f"/audit{_qs({'limit': limit, 'actor': actor})}")
+
+    def get_audit_sink(self) -> _JSONDict:
+        """GET /v1/audit/sink — where the audit log is streamed as CloudEvents (never the secret)."""
+        return self._get("/audit/sink")
+
+    def set_audit_sink(self, input: Mapping[str, Any]) -> _JSONDict:
+        """PUT /v1/audit/sink ``{type: "webhook", url, secret?}`` — stream the audit log to an
+        HTTPS endpoint as CloudEvents 1.0. A generated secret is returned once."""
+        return self.request("PUT", "/audit/sink", body=dict(input))
+
+    def remove_audit_sink(self) -> None:
+        """DELETE /v1/audit/sink — stop the audit-log export."""
+        self.request("DELETE", "/audit/sink")
+
+    def health_waivers(self, cbid: Optional[str] = None) -> _JSONDict:
+        """GET /v1/integration-health/waivers — checks the org chose not to meet."""
+        return self._get(f"/integration-health/waivers{_qs({'cbid': cbid})}")
+
+    def set_health_waiver(self, input: Mapping[str, Any]) -> _JSONDict:
+        """PUT /v1/integration-health/waivers ``{cbid?, check, subject?, reason, until?}`` — the
+        row then reports ``ok: None`` with ``waived``. Audited."""
+        return self.request("PUT", "/integration-health/waivers", body=dict(input))
+
+    def remove_health_waiver(self, check: str, cbid: Optional[str] = None, subject: Optional[str] = None) -> None:
+        """DELETE /v1/integration-health/waivers — the check reports its real state again."""
+        self.request("DELETE", f"/integration-health/waivers{_qs({'check': check, 'cbid': cbid, 'subject': subject})}")
 
     # -- public consent ingest --------------------------------------------
 
@@ -370,6 +462,11 @@ class _Sites(_Resource):
 
     def delete(self, cbid: str) -> None:
         self._c.request("DELETE", f"/sites/{_e(cbid)}")
+
+    def delete_sandbox(self, cbid: str) -> _JSONDict:
+        """DELETE /v1/sites/{cbid}?hard=1 — purge a SANDBOX site (its consent ledger, declarations and
+        test rights requests too). Anything not created as a sandbox is 403 ``not_a_sandbox``."""
+        return self._c.request("DELETE", f"/sites/{_e(cbid)}?hard=1")
 
     def list_partners(self, cbid: str) -> _JSONDict:
         """GET /v1/sites/{cbid}/partners — partner links and the partner catalogue."""
@@ -576,7 +673,7 @@ class _Sites(_Resource):
         return None
 
     def cookie_presets(self, cbid: str) -> _JSONDict:
-        """Every declaration preset (atlas, forumulate, chatly, cookiemunch, referally): its parameters,
+        """Every declaration preset (atlas, forumulate, chatly, cookiemunch, referalli, firstpromoter, partnerstack, tapfiliate, impact): its parameters,
         what it has declared on this site, and whether the vendor's manifest exists yet."""
         return self._c.request("GET", f"/sites/{_e(cbid)}/cookies/presets")
 
@@ -585,9 +682,39 @@ class _Sites(_Resource):
     ) -> _JSONDict:
         """Apply (or re-sync) a vendor preset: declares what that platform writes, marked
         ``vendor``. Atlas takes ``{"frontendApiHost", "crossSubdomainCookies"}``; Chatly
-        ``{"publicId", "dragging", "category"}``; Referally ``{"cookieDomain", "cookieDays", "category"}``. Names you declared are kept (``skipped``)."""
+        ``{"publicId", "dragging", "category"}``; referral presets ``{"cookieDomain", "cookieDays", "category"}`` (referalli ``legacyName``, impact ``campaignId``). Names you declared are kept (``skipped``)."""
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/presets/{_e(vendor)}{query}", body=params or {})
+
+    def import_cookie_manifest(
+        self, cbid: str, *, url: Optional[str] = None, manifest: Optional[_JSONDict] = None,
+        params: Optional[Dict[str, str]] = None, dry_run: bool = False,
+    ) -> _JSONDict:
+        """Declare any vendor's cookies and storage from its embed manifest: ``url`` (an https
+        ``/.well-known/forgedeck-embed.json``, re-read hourly) or the ``manifest`` itself. The vendor
+        id is the manifest's ``product``; remove it with ``remove_cookie_preset(cbid, product)``."""
+        body: _JSONDict = {"url": url} if url is not None else {"manifest": manifest}
+        if params is not None:
+            body["params"] = params
+        query = _qs({"dryRun": "1" if dry_run else None})
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/presets/custom{query}", body=body)
+
+    def cookie_suggestions(self, cbid: str) -> _JSONDict:
+        """What to declare: detected vendors and one suggestion per undeclared cookie or key."""
+        return self._c.request("GET", f"/sites/{_e(cbid)}/cookies/suggestions")
+
+    def declare_cookie_suggestions(
+        self, cbid: str, *, names: Optional[List[str]] = None, presets: Optional[bool] = None, dry_run: bool = False
+    ) -> _JSONDict:
+        """Declare the suggestions: detected vendors' presets, then every other one with a purpose.
+        Run with ``dry_run=True`` first."""
+        body: _JSONDict = {}
+        if names is not None:
+            body["names"] = names
+        if presets is not None:
+            body["presets"] = presets
+        query = _qs({"dryRun": "1" if dry_run else None})
+        return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/suggestions/declare{query}", body=body)
 
     def remove_cookie_preset(self, cbid: str, vendor: str, *, dry_run: bool = False) -> _JSONDict:
         """Remove every declaration a vendor preset made."""
@@ -698,6 +825,17 @@ class _Sites(_Resource):
     def brand(self, cbid: str) -> _JSONDict:
         return self._c.request("POST", f"/sites/{_e(cbid)}/brand", body={})
 
+    def get_brand(self, cbid: str) -> _JSONDict:
+        """GET /v1/sites/{cbid}/brand — the brand.json last imported: each role, the theme token it
+        sets, its ``source`` (``brand.json`` or ``site``), ``ignored`` and ``warnings``."""
+        return self._c._get(f"/sites/{_e(cbid)}/brand")
+
+    def set_brand(self, cbid: str, input: Mapping[str, Any], dry_run: bool = False) -> _JSONDict:
+        """PUT /v1/sites/{cbid}/brand — import a DTCG brand.json (``{"url": "https://…"}`` or the
+        document) into the banner theme and the rights page. Values the site set itself are kept
+        (brand.json < site banner theme < per-banner variant). ``dry_run=True`` saves nothing."""
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/brand{_qs({'dryRun': '1' if dry_run else None})}", body=dict(input))
+
     def preview_token(
         self,
         cbid: str,
@@ -748,6 +886,14 @@ class _Consent(_Resource):
         query = _qs({"from": from_, "to": to})
         return t.from_list(t.ConsentDay, self._c._get(f"/sites/{_e(cbid)}/consent/stats{query}"))
 
+    def insights(
+        self, cbid: str, *, from_: Optional[int] = None, to: Optional[int] = None
+    ) -> _JSONDict:
+        """GET /v1/sites/{cbid}/consent/insights — opt-in by region and A/B variant, and the
+        decision rate. Language and time-to-decision are not recorded (``None``)."""
+        query = _qs({"from": from_, "to": to})
+        return self._c._get(f"/sites/{_e(cbid)}/consent/insights{query}")
+
     def log(
         self,
         cbid: str,
@@ -775,6 +921,12 @@ class _Consent(_Resource):
 
     def export_subject(self, cbid: str, stamp: str) -> _JSONDict:
         return self._c._get(f"/sites/{_e(cbid)}/subject-export?stamp={_e(stamp)}")
+
+    def category_registry(self) -> _JSONDict:
+        """GET /v1/categories/registry — the reserved categories (support_chat, referrals) a site
+        switches on with ``categories.suite``: stance, fallback, basis, wording in every banner
+        language, known vendors. Public."""
+        return self._c._get("/categories/registry")
 
 
 class _Dsar(_Resource):
@@ -821,6 +973,64 @@ class _Dsar(_Resource):
         after the fact. An open one is refused (409 ``request_not_closed``). Audited; ``delete``
         then works on it. Returns ``{"request": ..., "changed": bool}``."""
         return self._c.request("POST", f"/dsar/{_e(id)}/mark-test")
+
+    def list_by_trace(self, trace: str) -> List[_JSONDict]:
+        """GET /v1/dsar?trace= — the request carrying one X-ForgeDeck-Trace."""
+        return self._c._get(f"/dsar{_qs({'trace': trace})}")
+
+    def open_case(
+        self,
+        cbid: str,
+        type: str,
+        *,
+        emails: Optional[List[str]] = None,
+        identity: Optional[Mapping[str, str]] = None,
+        subject_token: Optional[str] = None,
+        source: Optional[str] = None,
+        reason: Optional[str] = None,
+        skip_systems: Optional[List[str]] = None,
+        fulfill: Optional[bool] = None,
+        test: Optional[bool] = None,
+        idempotency_key: Optional[str] = None,
+        trace: Optional[str] = None,
+    ) -> _JSONDict:
+        """POST /v1/dsar/requests — open a case fanned out to every connected system.
+
+        ``type`` takes the canonical words (access, deletion, closure, restriction,
+        rectification) or an alias (erasure, erase, export). ``identity`` is
+        ``{"iss", "sub", "ext"?, "principal"?}`` from any issuer the site trusts. ``source``
+        ``product``/``atlas`` attests the person (needs dsar:write); ``admin`` files it received.
+        ``idempotency_key`` (16–128 chars) makes a retry answer the same case.
+        """
+        body: _JSONDict = {"cbid": cbid, "type": type}
+        if emails is not None or identity is not None:
+            subject: _JSONDict = {"emails": list(emails or [])}
+            if identity is not None:
+                subject["identity"] = dict(identity)
+            body["subject"] = subject
+        for key, value in (("subjectToken", subject_token), ("source", source), ("reason", reason), ("fulfill", fulfill), ("test", test)):
+            if value is not None:
+                body[key] = value
+        if skip_systems is not None:
+            body["skipSystems"] = list(skip_systems)
+        headers: Dict[str, str] = {}
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
+        if trace is not None:
+            headers["X-ForgeDeck-Trace"] = trace
+        return self._c.request("POST", "/dsar/requests", body=body, headers=headers or None)
+
+    def get_case(self, id: str) -> _JSONDict:
+        """GET /v1/dsar/requests/{id} — one case across every system."""
+        return self._c._get(f"/dsar/requests/{_e(id)}")
+
+    def cancel_case(self, id: str) -> _JSONDict:
+        """POST /v1/dsar/requests/{id}/cancel — before executeAfter; every system keeps its data."""
+        return self._c.request("POST", f"/dsar/requests/{_e(id)}/cancel")
+
+    def case_receipt(self, id: str) -> _JSONDict:
+        """GET /v1/dsar/requests/{id}/receipt — the signed (Ed25519) receipt for the case."""
+        return self._c._get(f"/dsar/requests/{_e(id)}/receipt")
 
     def advance(self, id: str, to_status: str, message_to_subject: Optional[str] = None) -> _JSONDict:
         """``message_to_subject`` replaces the line the subject reads in the notice."""
@@ -1013,6 +1223,8 @@ class _Keys(_Resource):
         cbids: Optional[List[str]] = None,
         expires_in_days: Optional[int] = None,
         expires_at: Optional[Union[int, str]] = None,
+        owner: Optional[str] = None,
+        strict_unknown_fields: Optional[bool] = None,
     ) -> t.ApiKey:
         """Issue an API key; the secret is returned once.
 
@@ -1031,6 +1243,10 @@ class _Keys(_Resource):
             body["expiresInDays"] = expires_in_days
         if expires_at is not None:
             body["expiresAt"] = expires_at
+        if owner is not None:
+            body["owner"] = owner
+        if strict_unknown_fields is not None:
+            body["strictUnknownFields"] = strict_unknown_fields
         return t.from_dict(t.ApiKey, self._c.request("POST", "/keys", body=body))
 
     def revoke(self, prefix: str) -> None:
@@ -1050,6 +1266,8 @@ class _Keys(_Resource):
         scopes: Optional[List[str]] = None,
         cbids: Optional[List[str]] = None,
         expires_at: Any = _UNSET,
+        owner: Optional[str] = None,
+        strict_unknown_fields: Optional[bool] = None,
     ) -> _JSONDict:
         """Rename a key, replace its scopes or property lock, or set (epoch ms / ISO) or remove
         (``expires_at=None``) its expiry. Only the fields sent change."""
@@ -1062,12 +1280,87 @@ class _Keys(_Resource):
             body["scopes"] = list(scopes)
         if cbids is not None:
             body["cbids"] = list(cbids)
+        if owner is not None:
+            body["owner"] = owner
+        if strict_unknown_fields is not None:
+            body["strictUnknownFields"] = strict_unknown_fields
         return self._c.request("PATCH", f"/keys/{_e(prefix)}", body=body)
 
     def report(self, unused_days: Optional[int] = None, expiring_days: Optional[int] = None) -> _JSONDict:
         """GET /v1/keys/report — keys unused for ``unused_days`` (default 90), keys with broad
         access, and keys expiring within ``expiring_days`` (default 14), each with a reason."""
         return self._c._get(f"/keys/report{_qs({'unusedDays': unused_days, 'expiringDays': expiring_days})}")
+
+    def list_standard(self) -> _JSONDict:
+        """GET /v1/keys?shape=standard — the suite-standard listing."""
+        return self._c._get("/keys?shape=standard")
+
+    def self_key(self) -> _JSONDict:
+        """GET /v1/keys/self — the calling key itself (any key): scopes, properties, expiry, owner."""
+        return self._c._get("/keys/self")
+
+    def roll_self(self) -> _JSONDict:
+        """POST /v1/keys/self/roll — the calling key rotates itself; the old secret stops at once.
+        Construct the client with ``headers={"Idempotency-Key": ...}`` so a lost answer can be replayed."""
+        return self._c.request("POST", "/keys/self/roll")
+
+    def vend(self, scopes: List[str], ttl_seconds: int, *, cbids: Optional[List[str]] = None, name: Optional[str] = None) -> _JSONDict:
+        """POST /v1/keys/vend — a short-lived key (at most 12 hours) within this key's own scopes and
+        properties. Needs ``keys:write`` or a full-access key."""
+        body: _JSONDict = {"scopes": list(scopes), "ttlSeconds": ttl_seconds}
+        if cbids is not None:
+            body["cbids"] = list(cbids)
+        if name is not None:
+            body["name"] = name
+        return self._c.request("POST", "/keys/vend", body=body)
+
+    def revoke_leaked(self, key: str, source: Optional[str] = None) -> _JSONDict:
+        """POST /v1/keys/revoke_leaked — revoke a published secret. Needs no valid key; always
+        answers ``{"received": n}``."""
+        body: _JSONDict = {"key": key}
+        if source is not None:
+            body["source"] = source
+        return self._c.request("POST", "/keys/revoke_leaked", body=body)
+
+
+class _Metadata(_Resource):
+    """Tags on created resources (``type``: org, site, webhook, executor, dsar, partner_link)."""
+
+    def get(self, type: str, id: str) -> _JSONDict:
+        return self._c._get(f"/metadata/{_e(type)}/{_e(id)}")
+
+    def update(self, type: str, id: str, metadata: Mapping[str, Any], dry_run: bool = False) -> _JSONDict:
+        """Merge tags (a ``None`` value removes one). ``forgedeck_sandbox`` cannot be set here."""
+        return self._c.request("PATCH", f"/metadata/{_e(type)}/{_e(id)}{_qs({'dryRun': '1' if dry_run else None})}", body={"metadata": dict(metadata)})
+
+
+class _PartnerLinks(_Resource):
+    """Suite-standard partner links."""
+
+    def list(self, metadata: Optional[Mapping[str, str]] = None) -> Any:
+        return self._c._get(f"/partner_links{_meta_qs(metadata)}")
+
+    def create(
+        self,
+        partner: str,
+        resource: str,
+        scopes: List[str],
+        *,
+        expires_at: Optional[str] = None,
+        external_id: Optional[str] = None,
+        label: Optional[str] = None,
+    ) -> _JSONDict:
+        body: _JSONDict = {"partner": partner, "resource": resource, "scopes": list(scopes)}
+        if expires_at is not None:
+            body["expires_at"] = expires_at
+        if external_id is not None:
+            body["externalId"] = external_id
+        if label is not None:
+            body["label"] = label
+        return self._c.request("POST", "/partner_links", body=body)
+
+    def revoke(self, id: str) -> _JSONDict:
+        return self._c.request("DELETE", f"/partner_links/{_e(id)}")
 
 
 class _Webhooks(_Resource):
@@ -1121,6 +1414,11 @@ class _Webhooks(_Resource):
     def replay_dead_letter(self, id: str) -> _JSONDict:
         """Deliver a dead letter again, to the subscription as it is now."""
         return self._c.request("POST", f"/webhooks/dead-letters/{_e(id)}/replay")
+
+    def replay(self, id: str, since: str, limit: Optional[int] = None) -> _JSONDict:
+        """POST /v1/webhooks/{id}/replay — send what a failing or disabled endpoint missed since
+        ``since`` (epoch ms or ISO date), oldest first, stopping at the first failure."""
+        return self._c.request("POST", f"/webhooks/{_e(id)}/replay{_qs({'since': since, 'limit': limit})}")
 
 
 class _Banners(_Resource):
@@ -1377,6 +1675,11 @@ class _Fulfillment(_Resource):
         """GET /v1/dsar/executors — systems connected to run part of a request."""
         return self._c._get("/dsar/executors")
 
+    def executor(self, id: str) -> _JSONDict:
+        """GET /v1/dsar/executors/{id} — one connection with its full profile, never its credentials.
+        Read it before changing ``profile``: ``update_executor`` replaces the whole profile."""
+        return self._c._get(f"/dsar/executors/{_e(id)}")
+
     def connect_executor(
         self,
         system: str,
@@ -1424,11 +1727,15 @@ class _Fulfillment(_Resource):
         webhook_secret: Optional[str] = None,
         auto: Optional[bool] = None,
         cbid: Optional[str] = None,
+        revoke_atlas_id_grant: Optional[bool] = None,
+        label: Optional[str] = None,
+        orchestrator: Optional[int] = None,
         dry_run: bool = False,
     ) -> _JSONDict:
         """POST /v1/dsar/executors with ``preset`` — connect a system from a versioned preset.
 
-        ``atlas`` (optional ``atlas_id_app_id``), ``forumulate`` (``org_id``), ``cm-standard-v1``
+        ``atlas`` (optional ``atlas_id_app_id``, and ``revoke_atlas_id_grant=True`` for the optional
+        grant step), ``forumulate`` (``org_id``), ``cm-standard-v1``
         (``base_url`` and ``system``) or ``chatly``. The response carries ``presetVersion`` and
         ``presetDiff``. A preset waiting on another platform's API is refused (409
         ``preset_waiting_on_platform``); see :meth:`executor_presets`.
@@ -1437,6 +1744,8 @@ class _Fulfillment(_Resource):
         for key, value in (
             ("system", system), ("baseUrl", base_url), ("orgId", org_id), ("atlasIdAppId", atlas_id_app_id),
             ("presetVersion", preset_version), ("webhookSecret", webhook_secret), ("auto", auto), ("cbid", cbid),
+            ("revokeAtlasIdGrant", revoke_atlas_id_grant), ("label", label),
+            ("orchestrator", orchestrator),
         ):
             if value is not None:
                 body[key] = value
@@ -1454,15 +1763,21 @@ class _Fulfillment(_Resource):
         preset_version: Optional[int] = None,
         org_id: Optional[str] = None,
         atlas_id_app_id: Optional[str] = None,
+        revoke_atlas_id_grant: Optional[bool] = None,
+        accept_preset: Optional[Sequence[str]] = None,
         dry_run: bool = False,
     ) -> _JSONDict:
         """POST /v1/dsar/executors/{id}/upgrade-preset — rebuild from the preset's latest version.
 
-        Keeps the id and credential. ``preset`` adopts one on a hand-written connection.
-        Answers with ``diff``; ``dry_run=True`` (``?dryRun=1``) changes nothing.
+        Keeps the id and credential, and your hand edits (``profileOverrides``): ``diff`` lists
+        each as ``kept`` or ``conflict``. ``accept_preset`` names overridden paths that take the
+        preset's value again. ``preset`` adopts one on a hand-written connection. A pinned
+        connection is refused (409 ``preset_pinned``). ``dry_run=True`` (``?dryRun=1``) changes nothing.
         """
         body: _JSONDict = {}
-        for key, value in (("preset", preset), ("presetVersion", preset_version), ("orgId", org_id), ("atlasIdAppId", atlas_id_app_id)):
+        if accept_preset is not None:
+            body["acceptPreset"] = list(accept_preset)
+        for key, value in (("preset", preset), ("presetVersion", preset_version), ("orgId", org_id), ("atlasIdAppId", atlas_id_app_id), ("revokeAtlasIdGrant", revoke_atlas_id_grant)):
             if value is not None:
                 body[key] = value
         return self._c.request("POST", f"/dsar/executors/{_e(id)}/upgrade-preset" + ("?dryRun=1" if dry_run else ""), body=body)
@@ -1476,12 +1791,16 @@ class _Fulfillment(_Resource):
         secret_key: Optional[str] = None,
         webhook_secret: Any = _UNSET,
         auto: Optional[bool] = None,
+        label: Any = _UNSET,
+        preset_pinned: Optional[bool] = None,
+        orchestrator: Optional[int] = None,
         dry_run: bool = False,
     ) -> _JSONDict:
         """PATCH /v1/dsar/executors/{id} — change a connection in place.
 
         Only what you pass changes; the stored credential is kept unless ``secret_key`` is
-        given. ``webhook_secret=None`` removes the webhook secret. ``dry_run=True``
+        given. ``webhook_secret=None`` removes the webhook secret, ``label=None`` the label.
+        ``preset_pinned=True`` stops ``upgrade_executor_preset`` changing it. ``dry_run=True``
         (``?dryRun=1``) returns the would-be connection and a diff, and changes nothing.
         """
         body: _JSONDict = {}
@@ -1495,6 +1814,12 @@ class _Fulfillment(_Resource):
             body["webhookSecret"] = webhook_secret
         if auto is not None:
             body["auto"] = auto
+        if label is not _UNSET:
+            body["label"] = label
+        if preset_pinned is not None:
+            body["presetPinned"] = preset_pinned
+        if orchestrator is not None:
+            body["orchestrator"] = orchestrator
         return self._c.request("PATCH", f"/dsar/executors/{_e(id)}" + ("?dryRun=1" if dry_run else ""), body=body)
 
     def test_executor_webhook(self, id: str, headers: Mapping[str, str], body: str) -> _JSONDict:
@@ -1508,6 +1833,17 @@ class _Fulfillment(_Resource):
     def executor_webhook_deliveries(self, id: str) -> List[_JSONDict]:
         """GET /v1/dsar/executors/{id}/webhook/deliveries — the last 50, each with its reason."""
         return self._c._get(f"/dsar/executors/{_e(id)}/webhook/deliveries")
+
+    def recheck_executor(self, id: str) -> _JSONDict:
+        """POST /v1/dsar/executors/{id}/recheck — a canary test that records the connection's health.
+
+        For a deploy pipeline to call after shipping the rights API.
+        """
+        return self._c.request("POST", f"/dsar/executors/{_e(id)}/recheck")
+
+    def executor_health_history(self, id: str, limit: Optional[int] = None) -> List[_JSONDict]:
+        """GET /v1/dsar/executors/{id}/health/history — the last checks, newest first (``limit`` 1 to 50)."""
+        return self._c._get(f"/dsar/executors/{_e(id)}/health/history{_qs({'limit': limit})}")
 
     def disconnect_executor(self, id: str) -> None:
         """DELETE /v1/dsar/executors/{id}."""
@@ -1543,6 +1879,16 @@ class _Fulfillment(_Resource):
         if open is not None:
             body["open"] = open
         return self._c.request("POST", f"/dsar/executors/{_e(id)}/test", body=body)
+
+    def executor_conformance(self, id: str) -> _JSONDict:
+        """POST /v1/dsar/executors/{id}/test ``{"conformance": true}`` — run the cm-standard-v2
+        conformance kit on the org canary subject only; every rule passes, fails or is skipped by name."""
+        return self._c.request("POST", f"/dsar/executors/{_e(id)}/test", body={"conformance": True})
+
+    def roll_executor_completion_secret(self, id: str) -> _JSONDict:
+        """POST /v1/dsar/executors/{id}/completion-secret/roll — a new completion secret, shown
+        once; the old one keeps verifying for 24 hours."""
+        return self._c.request("POST", f"/dsar/executors/{_e(id)}/completion-secret/roll")
 
     def task_export(self, request_id: str, task_id: str) -> _JSONDict:
         """GET /v1/dsar/{id}/tasks/{taskId}/export — the bundle a connected system produced."""
@@ -1727,6 +2073,26 @@ class _RightsIdentity(_Resource):
     def remove(self, cbid: str) -> _JSONDict:
         """Remove the site's own setting: it inherits the organisation default again."""
         return self._c.request("DELETE", f"/sites/{_e(cbid)}/rights-identity")
+
+
+class _DsarSettings(_Resource):
+    """A site's rights-request settings: ``graceDays`` (0–30; 7 for a new site, 0 until set for an existing one), how long an erasure or
+    account closure waits before any system acts. Requires dsar:read / dsar:write."""
+
+    def get(self, cbid: str) -> _JSONDict:
+        return self._c._get(f"/sites/{_e(cbid)}/dsar-settings")
+
+    def set(self, cbid: str, grace_days: int) -> _JSONDict:
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/dsar-settings", body={"graceDays": grace_days})
+
+
+class _Integrations(_Resource):
+    """Cards for support, CRM and helpdesk sidebars. Requires dsar:read."""
+
+    def subject_card(self, app: str, iss: Optional[str] = None, sub: Optional[str] = None, email: Optional[str] = None) -> _JSONDict:
+        """GET /v1/integrations/{app}/card — a person's open rights requests, by ``iss`` and
+        ``sub`` (preferred) or ``email``. Never matched across identities on a shared email."""
+        return self._c._get(f"/integrations/{_e(app)}/card{_qs({'iss': iss, 'sub': sub, 'email': email})}")
 
 
 class _Org(_Resource):
