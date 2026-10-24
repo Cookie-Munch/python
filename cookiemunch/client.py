@@ -114,6 +114,7 @@ class CookieMunch:
         self.preference_center = _PreferenceCenter(self)
         self.members = _Members(self)
         self.keys = _Keys(self)
+        self.sandbox = _Sandbox(self)
         self.webhooks = _Webhooks(self)
         self.banners = _Banners(self)
         # The privacy platform beyond the banner.
@@ -292,6 +293,11 @@ class CookieMunch:
         ``{key, enabled}`` and every limit as ``limits.<name>`` with ``limit`` (None = unlimited)
         and ``used`` where metered. Any key may read it."""
         return self._get("/entitlements")
+
+    def versions(self) -> _JSONDict:
+        """GET /v1/versions — the dated API versions, what each changed, and the one this key is
+        pinned to (``yours``). Re-pin with ``keys.update_self(api_version=...)``."""
+        return self._get("/versions")
 
     def integration_health(self, cbid: Optional[str] = None) -> _JSONDict:
         """GET /v1/integration-health — one row per link the site's privacy wiring depends on,
@@ -1211,6 +1217,27 @@ class _Members(_Resource):
         return self._c.request("DELETE", f"/members/{_e(user_id)}")
 
 
+class _Sandbox(_Resource):
+    """The organisation's sandbox: a separate test organisation with the same people and plan
+    features, never billed. Its keys are test keys and its rights requests are all tests.
+    ``create`` and ``delete`` need a full-access key or ``orgs:create``."""
+
+    def get(self) -> Optional[_JSONDict]:
+        """GET /v1/sandbox — the sandbox, or ``None``. From a sandbox key, the sandbox itself."""
+        return (self._c._get("/sandbox") or {}).get("sandbox")
+
+    def create(self, key_name: Optional[str] = None) -> _JSONDict:
+        """POST /v1/sandbox — make the sandbox (or reuse it, ``created: False``) and a new test key
+        for it, shown once."""
+        body = {"keyName": key_name} if key_name is not None else {}
+        return self._c.request("POST", "/sandbox", body=body)
+
+    def delete(self) -> _JSONDict:
+        """DELETE /v1/sandbox — erase the sandbox and everything in it. Cannot be undone; the live
+        organisation is not touched."""
+        return self._c.request("DELETE", "/sandbox")
+
+
 class _Keys(_Resource):
     def list(self) -> List[t.ApiKey]:
         return t.from_list(t.ApiKey, self._c._get("/keys"))
@@ -1299,6 +1326,10 @@ class _Keys(_Resource):
         """GET /v1/keys/self — the calling key itself (any key): scopes, properties, expiry, owner."""
         return self._c._get("/keys/self")
 
+    def update_self(self, api_version: str) -> _JSONDict:
+        """PATCH /v1/keys/self — re-pin the calling key to another dated API version (any key, for itself)."""
+        return self._c.request("PATCH", "/keys/self", body={"apiVersion": api_version})
+
     def roll_self(self) -> _JSONDict:
         """POST /v1/keys/self/roll — the calling key rotates itself; the old secret stops at once.
         Construct the client with ``headers={"Idempotency-Key": ...}`` so a lost answer can be replayed."""
@@ -1313,6 +1344,17 @@ class _Keys(_Resource):
         if name is not None:
             body["name"] = name
         return self._c.request("POST", "/keys/vend", body=body)
+
+    def exchange_operator_token(self, subject_token: str, scope: List[str], resource: str, *, subject_token_type: str = "access_token", expires_in: Optional[int] = None) -> _JSONDict:
+        """POST /v1/oauth/token (RFC 8693) — swap your identity provider's token for a short-lived, scoped
+        key. Needs no API key: the route never reads one, so a client made with any placeholder key works.
+        ``resource`` is ``org:<id>`` or ``site:<cbid>``; the key lives at most an hour."""
+        body: _JSONDict = {"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange", "subject_token": subject_token,
+                           "subject_token_type": "urn:ietf:params:oauth:token-type:" + subject_token_type, "scope": " ".join(scope),
+                           "resource": resource, "audience": "cookiemunch"}
+        if expires_in is not None:
+            body["expires_in"] = expires_in
+        return self._c.request("POST", "/oauth/token", body=body)
 
     def revoke_leaked(self, key: str, source: Optional[str] = None) -> _JSONDict:
         """POST /v1/keys/revoke_leaked — revoke a published secret. Needs no valid key; always
