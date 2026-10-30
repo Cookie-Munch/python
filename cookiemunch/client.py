@@ -1963,6 +1963,15 @@ class _Regulatory(_Resource):
     def upcoming(self, days: Optional[int] = None) -> _JSONDict:
         return self._c._get(f"/regulatory/upcoming{_qs({'days': days})}")
 
+    def upcoming_for_site(
+        self, cbid: str, days: Optional[int] = None, min_share: Optional[float] = None
+    ) -> _JSONDict:
+        """GET /v1/sites/{cbid}/regulatory/upcoming — what takes effect within ``days`` (default 90)
+        where at least ``min_share`` (default 0.01) of the site's last 30 days of decisions came
+        from. Needs ``sites:read``."""
+        query = _qs({"days": days, "minShare": min_share})
+        return self._c._get(f"/sites/{_e(cbid)}/regulatory/upcoming{query}")
+
 
 class _Subjects(_Resource):
     def consent(self, subject_id: str) -> _JSONDict:
