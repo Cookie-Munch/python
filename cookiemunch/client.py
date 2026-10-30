@@ -687,8 +687,8 @@ class _Sites(_Resource):
         self, cbid: str, vendor: str, params: Optional[_JSONDict] = None, *, dry_run: bool = False
     ) -> _JSONDict:
         """Apply (or re-sync) a vendor preset: declares what that platform writes, marked
-        ``vendor``. Atlas takes ``{"frontendApiHost", "crossSubdomainCookies"}``; Chatly
-        ``{"publicId", "dragging", "category"}``; referral presets ``{"cookieDomain", "cookieDays", "category"}`` (referalli ``legacyName``, impact ``campaignId``). Names you declared are kept (``skipped``)."""
+        ``vendor``. Atlas takes ``{"frontendApiHost", "crossSubdomainCookies", "publishableKey"}``; Chatly
+        ``{"publicId", "dragging", "storage", "tracking", "category"}``; referral presets ``{"cookieDomain", "cookieDays", "category"}`` (referalli ``legacyName``, impact ``campaignId``). Names you declared are kept (``skipped``)."""
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/presets/{_e(vendor)}{query}", body=params or {})
 
