@@ -269,6 +269,12 @@ class ExecutorWebhookTest(unittest.TestCase):
 
 
 class ExecutorPresetTest(unittest.TestCase):
+    def test_mint_from_sends_no_secret_key(self) -> None:
+        rec = Recorder()
+        client(rec).fulfillment.connect_executor_preset("chatly", mint_from="chatly", external_id="ws_1", dry_run=True)
+        self.assertEqual(rec.calls[0]["url"], "https://api.example.com/v1/dsar/executors?dryRun=1")
+        self.assertEqual(rec.calls[0]["body"], {"preset": "chatly", "mintFrom": "chatly", "externalId": "ws_1"})
+
     def test_presets_canary_and_upgrade(self) -> None:
         rec = Recorder()
         c = client(rec)

@@ -268,12 +268,12 @@ class CookieMunch:
 
     def delete_sandbox_org(self, id: str) -> _JSONDict:
         """DELETE /v1/orgs/{id}?hard=1 — remove a SANDBOX organisation of this account (created with
-        ``metadata.forgedeck_sandbox``). Anything else is 403 ``not_a_sandbox``."""
+        ``metadata.stack_sandbox``). Anything else is 403 ``not_a_sandbox``."""
         return self.request("DELETE", f"/orgs/{_e(id)}?hard=1")
 
     def provision_env(self, ref: str) -> _JSONDict:
-        """GET /v1/provision/env — what ``forgedeck env`` writes for the product provisioned with
-        this forgedeck ref: names, non-secret values, and references for secrets."""
+        """GET /v1/provision/env — what ``env`` writes for the product provisioned with
+        this stack ref: names, non-secret values, and references for secrets."""
         return self._get(f"/provision/env{_qs({'ref': ref})}")
 
     def languages(self) -> List[t.SupportedLanguage]:
@@ -307,7 +307,7 @@ class CookieMunch:
 
     def embed_manifest(self, cbid: str) -> _JSONDict:
         """GET /v1/embed?cbid= — the site's embed manifest (the tenant variant of
-        ``/.well-known/forgedeck-embed.json``): every origin by CSP directive and every browser key
+        ``/.well-known/cookiemunch-embed.json``): every origin by CSP directive and every browser key
         the embed writes for this site's config. Public: no key is needed."""
         return self._get(f"/embed{_qs({'cbid': cbid})}")
 
@@ -697,7 +697,7 @@ class _Sites(_Resource):
         params: Optional[Dict[str, str]] = None, dry_run: bool = False,
     ) -> _JSONDict:
         """Declare any vendor's cookies and storage from its embed manifest: ``url`` (an https
-        ``/.well-known/forgedeck-embed.json``, re-read hourly) or the ``manifest`` itself. The vendor
+        ``/.well-known/<product>-embed.json``, re-read hourly) or the ``manifest`` itself. The vendor
         id is the manifest's ``product``; remove it with ``remove_cookie_preset(cbid, product)``."""
         body: _JSONDict = {"url": url} if url is not None else {"manifest": manifest}
         if params is not None:
@@ -981,7 +981,7 @@ class _Dsar(_Resource):
         return self._c.request("POST", f"/dsar/{_e(id)}/mark-test")
 
     def list_by_trace(self, trace: str) -> List[_JSONDict]:
-        """GET /v1/dsar?trace= — the request carrying one X-ForgeDeck-Trace."""
+        """GET /v1/dsar?trace= — the request carrying one X-Trace-Id."""
         return self._c._get(f"/dsar{_qs({'trace': trace})}")
 
     def open_case(
@@ -1023,7 +1023,7 @@ class _Dsar(_Resource):
         if idempotency_key is not None:
             headers["Idempotency-Key"] = idempotency_key
         if trace is not None:
-            headers["X-ForgeDeck-Trace"] = trace
+            headers["X-Trace-Id"] = trace
         return self._c.request("POST", "/dsar/requests", body=body, headers=headers or None)
 
     def get_case(self, id: str) -> _JSONDict:
@@ -1372,7 +1372,7 @@ class _Metadata(_Resource):
         return self._c._get(f"/metadata/{_e(type)}/{_e(id)}")
 
     def update(self, type: str, id: str, metadata: Mapping[str, Any], dry_run: bool = False) -> _JSONDict:
-        """Merge tags (a ``None`` value removes one). ``forgedeck_sandbox`` cannot be set here."""
+        """Merge tags (a ``None`` value removes one). ``stack_sandbox`` cannot be set here."""
         return self._c.request("PATCH", f"/metadata/{_e(type)}/{_e(id)}{_qs({'dryRun': '1' if dry_run else None})}", body={"metadata": dict(metadata)})
 
 
@@ -1759,8 +1759,10 @@ class _Fulfillment(_Resource):
     def connect_executor_preset(
         self,
         preset: str,
-        secret_key: str,
+        secret_key: Optional[str] = None,
         *,
+        mint_from: Optional[str] = None,
+        external_id: Optional[str] = None,
         system: Optional[str] = None,
         base_url: Optional[str] = None,
         org_id: Optional[str] = None,
@@ -1781,9 +1783,14 @@ class _Fulfillment(_Resource):
         (``base_url`` and ``system``) or ``chatly``. The response carries ``presetVersion`` and
         ``presetDiff``. A preset waiting on another platform's API is refused (409
         ``preset_waiting_on_platform``); see :meth:`executor_presets`.
+
+        Send ``secret_key``, or ``mint_from`` (a partner id that registered an executorKeyUrl) to have
+        that partner mint the key for the site under its link; ``external_id`` names the partner account
+        (default: the one the site's live link names).
         """
-        body: _JSONDict = {"preset": preset, "secretKey": secret_key}
+        body: _JSONDict = {"preset": preset}
         for key, value in (
+            ("secretKey", secret_key), ("mintFrom", mint_from), ("externalId", external_id),
             ("system", system), ("baseUrl", base_url), ("orgId", org_id), ("atlasIdAppId", atlas_id_app_id),
             ("presetVersion", preset_version), ("webhookSecret", webhook_secret), ("auto", auto), ("cbid", cbid),
             ("revokeAtlasIdGrant", revoke_atlas_id_grant), ("label", label),
@@ -2129,12 +2136,30 @@ class _DsarSettings(_Resource):
 
 
 class _Integrations(_Resource):
-    """Cards for support, CRM and helpdesk sidebars. Requires dsar:read."""
+    """Cards for support, CRM and helpdesk sidebars (dsar:read), and identity-provider connect (dsar:write)."""
 
     def subject_card(self, app: str, iss: Optional[str] = None, sub: Optional[str] = None, email: Optional[str] = None) -> _JSONDict:
         """GET /v1/integrations/{app}/card — a person's open rights requests, by ``iss`` and
         ``sub`` (preferred) or ``email``. Never matched across identities on a shared email."""
         return self._c._get(f"/integrations/{_e(app)}/card{_qs({'iss': iss, 'sub': sub, 'email': email})}")
+
+    def connect(
+        self,
+        provider: str,
+        cbid: str,
+        provider_key: str,
+        connector: Optional[Mapping[str, Any]] = None,
+        dry_run: bool = False,
+    ) -> _JSONDict:
+        """POST /v1/integrations/{provider}/connect — connect an identity provider's privacy
+        orchestrator: mint a ``dsar:write`` key locked to ``cbid`` and hand it to the provider,
+        authorised with ``provider_key``. The minted key is never returned, only its prefix.
+        ``connector`` ({url, method, body}) only for a provider with no built-in connector.
+        Needs dsar:write (no keys:write); ``dry_run=True`` mints and sends nothing."""
+        body: Dict[str, Any] = {"cbid": cbid, "providerKey": provider_key}
+        if connector is not None:
+            body["connector"] = dict(connector)
+        return self._c.request("POST", f"/integrations/{_e(provider)}/connect{_qs({'dryRun': '1' if dry_run else None})}", body=body)
 
 
 class _Org(_Resource):
