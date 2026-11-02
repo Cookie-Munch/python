@@ -727,6 +727,34 @@ class _Sites(_Resource):
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/suggestions/declare{query}", body=body)
 
+    def translation(self, cbid: str) -> _JSONDict:
+        """The site's own translation account (DeepL or Google): provider, key last four and
+        fingerprint, when connected. Never the key."""
+        return self._c.request("GET", f"/sites/{_e(cbid)}/translation")
+
+    def connect_translation(self, cbid: str, provider: str, key: str, *, verify: bool = False) -> _JSONDict:
+        """Connect the site's own DeepL or Google Cloud Translation key (``provider``: ``deepl`` or
+        ``google``). Stored sealed, never returned. ``verify`` checks it first, sending no text."""
+        query = _qs({"verify": "1" if verify else None})
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/translation{query}", body={"provider": provider, "key": key})
+
+    def disconnect_translation(self, cbid: str) -> _JSONDict:
+        """Remove the site's translation key. Translations already stored stay."""
+        return self._c.request("DELETE", f"/sites/{_e(cbid)}/translation")
+
+    def translate_cookies(
+        self, cbid: str, *, languages: Optional[List[str]] = None, names: Optional[List[str]] = None, dry_run: bool = False
+    ) -> _JSONDict:
+        """Machine-translate the missing purposes of the site's own cookie rows on its connected
+        account. Never overwrites a row's text. ``dry_run=True`` calls no provider."""
+        body: _JSONDict = {}
+        if languages is not None:
+            body["languages"] = languages
+        if names is not None:
+            body["names"] = names
+        query = _qs({"dryRun": "1" if dry_run else None})
+        return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/translate{query}", body=body)
+
     def remove_cookie_preset(self, cbid: str, vendor: str, *, dry_run: bool = False) -> _JSONDict:
         """Remove every declaration a vendor preset made."""
         query = _qs({"dryRun": "1" if dry_run else None})
@@ -1008,8 +1036,12 @@ class _Dsar(_Resource):
         test: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
         trace: Optional[str] = None,
+        controller: Optional[str] = None,
     ) -> _JSONDict:
         """POST /v1/dsar/requests — open a case fanned out to every connected system.
+
+        ``controller``: on a processor site, the id of the business the case concerns (optional
+        when the site lists one); the case is then passed to it instead of your systems.
 
         ``type`` takes the canonical words (access, deletion, closure, restriction,
         rectification) or an alias (erasure, erase, export). ``identity`` is
@@ -1023,7 +1055,7 @@ class _Dsar(_Resource):
             if identity is not None:
                 subject["identity"] = dict(identity)
             body["subject"] = subject
-        for key, value in (("subjectToken", subject_token), ("source", source), ("reason", reason), ("fulfill", fulfill), ("test", test)):
+        for key, value in (("subjectToken", subject_token), ("source", source), ("reason", reason), ("fulfill", fulfill), ("test", test), ("controller", controller)):
             if value is not None:
                 body[key] = value
         if skip_systems is not None:
@@ -2198,6 +2230,12 @@ class _DsarSettings(_Resource):
 
     def set(self, cbid: str, grace_days: int) -> _JSONDict:
         return self._c.request("PUT", f"/sites/{_e(cbid)}/dsar-settings", body={"graceDays": grace_days})
+
+    def update(self, cbid: str, settings: Mapping[str, Any]) -> _JSONDict:
+        """Change only the fields given: ``graceDays``, ``processing`` (this site is a processor:
+        ``{"role": "processor", "controllers": [...]}``, ``None`` clears) and ``acceptForwardsFrom``
+        (processors that may open cases here, ``None`` clears). A webhook ``secret`` is write-only."""
+        return self._c.request("PUT", f"/sites/{_e(cbid)}/dsar-settings", body=dict(settings))
 
 
 class _Integrations(_Resource):
