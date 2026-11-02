@@ -1943,6 +1943,14 @@ class _Fulfillment(_Resource):
             body["orchestrator"] = orchestrator
         return self._c.request("PATCH", f"/dsar/executors/{_e(id)}" + ("?dryRun=1" if dry_run else ""), body=body)
 
+    def upsert_executor(self, body: Mapping[str, Any]) -> _JSONDict:
+        """PUT /v1/dsar/executors — create or update the connection for a system from the same body as a create.
+
+        Re-running it changes nothing; a changed create-only field answers 409 ``immutable_field``
+        naming every such field. The answer carries ``upserted``: ``created`` or ``updated``.
+        """
+        return self._c.request("PUT", "/dsar/executors", body=dict(body))
+
     def test_executor_webhook(self, id: str, headers: Mapping[str, str], body: str) -> _JSONDict:
         """POST /v1/dsar/executors/{id}/webhook/test — would this delivery verify?
 
