@@ -727,6 +727,12 @@ class _Sites(_Resource):
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/suggestions/declare{query}", body=body)
 
+    def plan_cookies(self, cbid: str, input: Optional[_JSONDict] = None) -> _JSONDict:
+        """Plan a provisioning run, storing nothing: ``cookies``/``replace`` (the declarations PUT),
+        then each preset in ``presets`` (vendor → params) in key order, against one scratch copy.
+        Answers ``{dryRun, steps, declared, count, diff}``."""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/plan", body=input or {})
+
     def translation(self, cbid: str) -> _JSONDict:
         """The site's own translation account (DeepL or Google): provider, key last four and
         fingerprint, when connected. Never the key."""
