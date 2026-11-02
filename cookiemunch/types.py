@@ -296,6 +296,8 @@ class WebhookSubscription:
     url: Optional[str] = None
     secret: Optional[str] = None
     events: List[str] = field(default_factory=list)
+    # The events the patterns in ``events`` (``*``, ``consent.*``) take today.
+    matches: List[str] = field(default_factory=list)
     cbid: Optional[str] = None
     active: bool = False
     created_at: Optional[int] = None

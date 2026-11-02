@@ -452,11 +452,13 @@ class _Sites(_Resource):
         domain: Optional[str] = None,
         name: Any = _UNSET,
         aliases: Optional[List[str]] = None,
+        keep_old_domain: bool = False,
         dry_run: bool = False,
     ) -> _JSONDict:
         """PATCH /v1/sites/{cbid} — rename or move a site. The cbid and the consent ledger stay;
         a domain move clears verification. ``name=None`` clears the display name; ``aliases=[]``
-        clears the aliases. ``dry_run=True`` answers with the diff and stores nothing."""
+        clears the aliases. ``keep_old_domain=True`` with a new domain keeps the old one as an
+        alias while both run. ``dry_run=True`` answers with the diff and stores nothing."""
         body: _JSONDict = {}
         if domain is not None:
             body["domain"] = domain
@@ -464,6 +466,8 @@ class _Sites(_Resource):
             body["name"] = name
         if aliases is not None:
             body["aliases"] = list(aliases)
+        if keep_old_domain:
+            body["keepOldDomain"] = True
         return self._c.request("PATCH", f"/sites/{_e(cbid)}{_qs({'dryRun': '1' if dry_run else None})}", body=body)
 
     def delete(self, cbid: str) -> None:
@@ -984,6 +988,10 @@ class _Dsar(_Resource):
         """GET /v1/dsar?trace= — the request carrying one X-Trace-Id."""
         return self._c._get(f"/dsar{_qs({'trace': trace})}")
 
+    def list_by_origin(self, origin: str) -> List[_JSONDict]:
+        """GET /v1/dsar?origin= — ``account_deletion``: the requests a person's own account deletion opened."""
+        return self._c._get(f"/dsar{_qs({'origin': origin})}")
+
     def open_case(
         self,
         cbid: str,
@@ -1410,11 +1418,14 @@ class _Webhooks(_Resource):
         return t.from_list(t.WebhookSubscription, self._c._get("/webhooks"))
 
     def create(
-        self, *, url: str, events: List[str], cbid: Optional[str] = None
+        self, *, url: str, events: List[str], cbid: Optional[str] = None, secret: Optional[str] = None
     ) -> t.WebhookSubscription:
+        """``events`` takes names, ``*`` and ``<family>.*``. A ``secret`` you choose (32-256 chars) is not echoed back."""
         body: _JSONDict = {"url": url, "events": list(events)}
         if cbid is not None:
             body["cbid"] = cbid
+        if secret is not None:
+            body["secret"] = secret
         return t.from_dict(t.WebhookSubscription, self._c.request("POST", "/webhooks", body=body))
 
     def update(
@@ -1441,8 +1452,10 @@ class _Webhooks(_Resource):
     def delete(self, id: str) -> None:
         self._c.request("DELETE", f"/webhooks/{_e(id)}")
 
-    def roll_secret(self, id: str) -> _JSONDict:
-        """Rotate the signing secret. The new secret is returned once."""
+    def roll_secret(self, id: str, *, secret: Optional[str] = None) -> _JSONDict:
+        """Rotate the signing secret. A generated one is returned once; one you pass is not echoed (``rolled``)."""
+        if secret is not None:
+            return self._c.request("POST", f"/webhooks/{_e(id)}/roll", body={"secret": secret})
         return self._c.request("POST", f"/webhooks/{_e(id)}/roll")
 
     def test(self, id: str) -> _JSONDict:
@@ -1731,6 +1744,8 @@ class _Fulfillment(_Resource):
         webhook_secret: Optional[str] = None,
         auto: Optional[bool] = None,
         dry_run: bool = False,
+        require_approval: Optional[bool] = None,
+        verify: Optional[str] = None,
     ) -> _JSONDict:
         """POST /v1/dsar/executors — connect a system that runs part of a rights request.
 
@@ -1754,7 +1769,9 @@ class _Fulfillment(_Resource):
             body["webhookSecret"] = webhook_secret
         if auto is not None:
             body["auto"] = auto
-        return self._c.request("POST", "/dsar/executors" + ("?dryRun=1" if dry_run else ""), body=body)
+        if require_approval is not None:
+            body["requireApproval"] = require_approval
+        return self._c.request("POST", "/dsar/executors" + _connect_qs(dry_run, verify), body=body)
 
     def connect_executor_preset(
         self,
@@ -1775,6 +1792,8 @@ class _Fulfillment(_Resource):
         label: Optional[str] = None,
         orchestrator: Optional[int] = None,
         dry_run: bool = False,
+        require_approval: Optional[bool] = None,
+        verify: Optional[str] = None,
     ) -> _JSONDict:
         """POST /v1/dsar/executors with ``preset`` — connect a system from a versioned preset.
 
@@ -1794,11 +1813,11 @@ class _Fulfillment(_Resource):
             ("system", system), ("baseUrl", base_url), ("orgId", org_id), ("atlasIdAppId", atlas_id_app_id),
             ("presetVersion", preset_version), ("webhookSecret", webhook_secret), ("auto", auto), ("cbid", cbid),
             ("revokeAtlasIdGrant", revoke_atlas_id_grant), ("label", label),
-            ("orchestrator", orchestrator),
+            ("orchestrator", orchestrator), ("requireApproval", require_approval),
         ):
             if value is not None:
                 body[key] = value
-        return self._c.request("POST", "/dsar/executors" + ("?dryRun=1" if dry_run else ""), body=body)
+        return self._c.request("POST", "/dsar/executors" + _connect_qs(dry_run, verify), body=body)
 
     def executor_presets(self) -> _JSONDict:
         """GET /v1/dsar/executors/presets — the presets, which wait on another platform, and the org canary address."""
@@ -1902,6 +1921,15 @@ class _Fulfillment(_Resource):
         """GET /v1/dsar/{id}/tasks/{taskId} — one task: status history, upstream log, versions."""
         return self._c._get(f"/dsar/{_e(request_id)}/tasks/{_e(task_id)}")
 
+    def approve_task(self, request_id: str, task_id: str) -> _JSONDict:
+        """POST /v1/dsar/{id}/tasks/{taskId}/approve — send an erasure that was awaiting approval. Audited."""
+        return self._c.request("POST", f"/dsar/{_e(request_id)}/tasks/{_e(task_id)}/approve")
+
+    def reject_task(self, request_id: str, task_id: str, reason: Optional[str] = None) -> _JSONDict:
+        """POST /v1/dsar/{id}/tasks/{taskId}/reject — refuse it: nothing is sent, the task fails with ``reason``."""
+        body: _JSONDict = {} if reason is None else {"reason": reason}
+        return self._c.request("POST", f"/dsar/{_e(request_id)}/tasks/{_e(task_id)}/reject", body=body)
+
     def test_executor(
         self,
         id: str,
@@ -1953,6 +1981,13 @@ class _Fulfillment(_Resource):
         if error is not None:
             body["error"] = error
         return self._c.request("POST", f"/dsar/agent/tasks/{_e(task_id)}/result", body=body)
+
+
+def _connect_qs(dry_run: bool, verify: Optional[str]) -> str:
+    """``verify``: "1" probes the connection first and refuses a failing one (422); "warn" stores it with a warning."""
+    if verify is not None and verify not in ("1", "warn"):
+        raise ValueError('verify must be "1" or "warn"')
+    return _qs({"dryRun": "1" if dry_run else None, "verify": verify})
 
 
 class _Regulatory(_Resource):
