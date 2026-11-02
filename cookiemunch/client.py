@@ -115,6 +115,7 @@ class CookieMunch:
         self.members = _Members(self)
         self.keys = _Keys(self)
         self.sandbox = _Sandbox(self)
+        self.anchors = _Anchors(self)
         self.webhooks = _Webhooks(self)
         self.banners = _Banners(self)
         # The privacy platform beyond the banner.
@@ -1223,6 +1224,26 @@ class _Members(_Resource):
 
     def remove(self, user_id: str) -> Any:
         return self._c.request("DELETE", f"/members/{_e(user_id)}")
+
+
+class _Anchors(_Resource):
+    """Audit anchoring: post the head of your own hash-chained log and keep the signed receipt.
+    ``seq`` must strictly increase per stream; the same seq and head again returns the original
+    receipt, a different head for an anchored seq is a 409 (``anchor_head_mismatch``).
+    ``create`` needs ``anchors:write``; ``list`` and ``get`` need ``anchors:read``."""
+
+    def create(self, stream: str, head: str, seq: int) -> _JSONDict:
+        """POST /v1/anchors — a receipt signed with the key in /v1/partner/jwks.json."""
+        return self._c.request("POST", "/anchors", body={"stream": stream, "head": head, "seq": seq})
+
+    def list(self, stream: str, limit: Optional[int] = None, before: Optional[int] = None) -> _JSONDict:
+        """GET /v1/anchors/{stream} — ``{stream, anchors, nextBefore}``, newest first. Pass
+        ``nextBefore`` as ``before`` until it is ``None``."""
+        return self._c._get(f"/anchors/{_e(stream)}{_qs({'limit': limit, 'before': before})}")
+
+    def get(self, stream: str, id: str) -> _JSONDict:
+        """GET /v1/anchors/{stream}/{id} — one receipt."""
+        return self._c._get(f"/anchors/{_e(stream)}/{_e(id)}")
 
 
 class _Sandbox(_Resource):
