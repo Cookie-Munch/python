@@ -635,7 +635,8 @@ class _Sites(_Resource):
         ``purposes`` is the purpose in other languages (``{"es": "…", "pt-BR": "…"}``);
         ``purpose`` is the fallback. ``dry_run=True`` stores nothing and answers with the
         would-be list (``declared``) and a ``diff``. ``type`` declares browser storage instead
-        of a cookie: ``"localStorage"``, ``"sessionStorage"`` or ``"indexedDB"``."""
+        of a cookie: ``"localStorage"``, ``"sessionStorage"`` or ``"indexedDB"``; ``"none"`` declares a
+        cookieless processor that stores nothing."""
         body: _JSONDict = {"category": category, "purpose": purpose}
         for key, value in (
             ("provider", provider),
@@ -693,7 +694,7 @@ class _Sites(_Resource):
         return None
 
     def cookie_presets(self, cbid: str) -> _JSONDict:
-        """Every declaration preset (atlas, forumulate, chatly, cookiemunch, referalli, firstpromoter, partnerstack, tapfiliate, impact): its parameters,
+        """Every declaration preset (atlas, forumulate, chatly, cookiemunch, referalli, firstpromoter, partnerstack, tapfiliate, impact, seolyticize): its parameters,
         what it has declared on this site, and whether the vendor's manifest exists yet."""
         return self._c.request("GET", f"/sites/{_e(cbid)}/cookies/presets")
 
