@@ -72,6 +72,19 @@ class UserAgentOverrideTests(unittest.TestCase):
         self.assertEqual(tr.last["headers"]["User-Agent"], "acme/2")
 
 
+class ListEnvelopeTests(unittest.TestCase):
+    def _call(self, payload: Any, version: str) -> Any:
+        resp = HttpResponse(status=200, headers={"Content-Type": "application/json", "CookieMunch-Version": version}, body=json.dumps(payload).encode())
+        return CookieMunch(api_key="fck_x", base_url="https://api.example.com", transport=RecordingTransport([resp])).fulfillment.executors()
+
+    def test_unwraps_data_from_2026_11_03_and_keeps_bare_arrays(self):
+        rows = [{"id": "ex_1"}]
+        self.assertEqual(self._call({"data": rows, "next": "1"}, "2026-11-03"), rows)
+        self.assertEqual(self._call(rows, "2026-01-01"), rows)
+        self.assertEqual(self._call({"data": rows}, "2026-10-24"), {"data": rows})
+        self.assertEqual(self._call({"data": rows, "total": 1}, "2026-11-03"), {"data": rows, "total": 1})
+
+
 class DryRunConfigTests(unittest.TestCase):
     def test_patch_and_put_previews(self):
         tr = RecordingTransport()

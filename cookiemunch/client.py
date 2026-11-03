@@ -58,6 +58,15 @@ def _qs(params: Optional[Mapping[str, Any]]) -> str:
     return "?" + urllib.parse.urlencode(pairs)
 
 
+
+def _unwrap_list(version: Optional[str], body: Any) -> Any:
+    """From API version 2026-11-03 a list answers ``{"data": [...]}`` (plus ``next``); hand back the list either way."""
+    if not version or version < "2026-11-03" or not isinstance(body, dict):
+        return body
+    if isinstance(body.get("data"), list) and set(body) <= {"data", "next"}:
+        return body["data"]
+    return body
+
 class CookieMunch:
     """Typed REST client for the Cookie Munch Developer API.
 
@@ -196,7 +205,7 @@ class CookieMunch:
             return text
         ctype = resp.header("content-type") or ""
         if "application/json" in ctype:
-            return _json.loads(text) if text else None
+            return _unwrap_list(resp.header("cookiemunch-version"), _json.loads(text)) if text else None
         return text
 
     @staticmethod
