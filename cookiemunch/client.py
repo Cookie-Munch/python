@@ -771,6 +771,16 @@ class _Sites(_Resource):
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/translate{query}", body=body)
 
+    def translate_config(self, cbid: str, *, languages: Optional[List[str]] = None, dry_run: bool = False) -> _JSONDict:
+        """Machine-translate the site's own banner and category copy into the i18n.overrides
+        languages it lacks, on its connected account. Never overwrites a person's text.
+        ``dry_run=True`` calls no provider."""
+        body: _JSONDict = {}
+        if languages is not None:
+            body["languages"] = languages
+        query = _qs({"dryRun": "1" if dry_run else None})
+        return self._c.request("POST", f"/sites/{_e(cbid)}/config/translate{query}", body=body)
+
     def remove_cookie_preset(self, cbid: str, vendor: str, *, dry_run: bool = False) -> _JSONDict:
         """Remove every declaration a vendor preset made."""
         query = _qs({"dryRun": "1" if dry_run else None})
