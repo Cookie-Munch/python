@@ -360,6 +360,15 @@ class RetireAndScanTest(unittest.TestCase):
         self.assertEqual(rec.calls[1]["url"], "https://api.example.com/v1/sites/cb/scan?wait=5")
         self.assertEqual((r.state, r.scan_id, r.cookie_count, r.kept_from_earlier, r.pages_visited, r.duration_ms), ("done", "s1", 3, 12, 5, 31000))
 
+    def test_scan_signed_in_cookies_and_the_diff(self) -> None:
+        rec = Recorder(body=json.dumps({"state": "done", "undeclared": [{"name": "_ga", "category": "statistics"}], "stale": [{"name": "old", "lastSeenAt": None}]}).encode())
+        c = client(rec)
+        r = c.sites.scan("cb", cookies="sid=abc")
+        c.sites.scan("cb")
+        self.assertEqual(rec.calls[0]["body"], {"cookies": "sid=abc"})
+        self.assertIsNone(rec.calls[1]["body"])
+        self.assertEqual((r.undeclared[0]["name"], r.stale[0]["name"]), ("_ga", "old"))
+
     def test_wait_for_scan_long_polls_within_the_client_timeout(self) -> None:
         rec = SequenceRecorder([{"status": "scanning", "state": "scanning"}, {"status": "idle", "state": "failed", "error": "timed out after 90 s"}])
         r = client(rec).sites.wait_for_scan("cb", timeout_ms=120_000)

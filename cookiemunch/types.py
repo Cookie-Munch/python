@@ -151,6 +151,10 @@ class ScanResult:
     button_parity: Optional[Dict[str, Any]] = None
     pages_scanned: Optional[int] = None
     cookies_found: Optional[int] = None
+    #: Once done: cookies the scan saw (or a visit since) that no declaration covers.
+    undeclared: Optional[List[Dict[str, Any]]] = None
+    #: Once done: declarations the scan did not see and nothing has seen for staleAfterDays.
+    stale: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass

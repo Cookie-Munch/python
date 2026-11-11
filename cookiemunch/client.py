@@ -327,11 +327,12 @@ class CookieMunch:
         Forumulate token in ``input`` are used for this request only; no secret is returned."""
         return self.request("POST", f"/provision{_qs({'dryRun': '1' if dry_run else None, 'fromStep': from_step})}", body=dict(input))
 
-    def audit(self, limit: Optional[int] = None, actor: Optional[str] = None) -> _JSONDict:
+    def audit(self, limit: Optional[int] = None, actor: Optional[str] = None, since: Optional[str] = None) -> _JSONDict:
         """GET /v1/audit — the org's audit log, newest first. API actions appear as
-        ``apikey:<prefix>``. Requires an unscoped key, except ``actor="self"`` (this key's
-        own rows), which any key may read."""
-        return self._get(f"/audit{_qs({'limit': limit, 'actor': actor})}")
+        ``apikey:<prefix>``. Requires an unscoped key or ``audit:read``, except ``actor="self"``
+        (this key's own rows), which any key may read. ``since`` (ISO 8601 or epoch ms) keeps
+        rows at or after it."""
+        return self._get(f"/audit{_qs({'limit': limit, 'actor': actor, 'since': since})}")
 
     def get_audit_sink(self) -> _JSONDict:
         """GET /v1/audit/sink — where the audit log is streamed as CloudEvents (never the secret)."""
@@ -559,10 +560,13 @@ class _Sites(_Resource):
     def cookies(self, cbid: str) -> List[t.SiteCookie]:
         return t.from_list(t.SiteCookie, self._c._get(f"/sites/{_e(cbid)}/cookies"))
 
-    def scan(self, cbid: str, *, wait: Optional[float] = None) -> t.ScanResult:
+    def scan(self, cbid: str, *, wait: Optional[float] = None, cookies: Optional[Union[str, List[Dict[str, str]]]] = None) -> t.ScanResult:
         """Start a cookie crawl: answers at once with ``scan_id`` and ``state="queued"``.
-        ``wait`` (seconds, at most 60) holds the request until it is done or failed."""
-        return t.from_dict(t.ScanResult, self._c.request("POST", f"/sites/{_e(cbid)}/scan{_qs({'wait': _num(wait)})}"))
+        ``wait`` (seconds, at most 60) holds the request until it is done or failed.
+        ``cookies`` (a Cookie header value or ``[{"name", "value"}]``, a test account's
+        session) makes it a signed-in crawl; never stored or returned."""
+        body = {"cookies": cookies} if cookies is not None else None
+        return t.from_dict(t.ScanResult, self._c.request("POST", f"/sites/{_e(cbid)}/scan{_qs({'wait': _num(wait)})}", body=body))
 
     def scan_status(self, cbid: str, *, wait: Optional[float] = None) -> t.ScanResult:
         """The last scan: ``state``, timings, ``cookie_count``, ``pages_visited``, ``error``.
@@ -694,7 +698,7 @@ class _Sites(_Resource):
         return None
 
     def cookie_presets(self, cbid: str) -> _JSONDict:
-        """Every declaration preset (atlas, forumulate, chatly, cookiemunch, referalli, firstpromoter, partnerstack, tapfiliate, impact, seolyticize): its parameters,
+        """Every declaration preset (atlas, forumulate, chatly, cookiemunch, referalli, firstpromoter, partnerstack, tapfiliate, impact, seolyticize, lucida, hermetica, watchtower): its parameters,
         what it has declared on this site, and whether the vendor's manifest exists yet."""
         return self._c.request("GET", f"/sites/{_e(cbid)}/cookies/presets")
 
@@ -703,7 +707,7 @@ class _Sites(_Resource):
     ) -> _JSONDict:
         """Apply (or re-sync) a vendor preset: declares what that platform writes, marked
         ``vendor``. Atlas takes ``{"frontendApiHost", "crossSubdomainCookies", "publishableKey"}``; Chatly
-        ``{"publicId", "dragging", "storage", "tracking", "category"}``; referral presets ``{"cookieDomain", "cookieDays", "category"}`` (referalli ``legacyName``, impact ``campaignId``). Names you declared are kept (``skipped``)."""
+        ``{"publicId", "dragging", "storage", "tracking", "category"}``; referral presets ``{"cookieDomain", "cookieDays", "category"}`` (referalli ``legacyName``, impact ``campaignId``); lucida ``{"publicKey", "cookieDomain", "category"}``, hermetica ``{"storage", "category"}`` (storage "localStorage" or "cookie"), watchtower ``category``. Names you declared are kept (``skipped``)."""
         query = _qs({"dryRun": "1" if dry_run else None})
         return self._c.request("PUT", f"/sites/{_e(cbid)}/cookies/presets/{_e(vendor)}{query}", body=params or {})
 
@@ -1873,8 +1877,12 @@ class _Fulfillment(_Resource):
         dry_run: bool = False,
         require_approval: Optional[bool] = None,
         verify: Optional[str] = None,
+        params: Optional[Mapping[str, object]] = None,
     ) -> _JSONDict:
         """POST /v1/dsar/executors with ``preset`` — connect a system from a versioned preset.
+
+        ``params`` carries any of the preset's params by name (``{"programId": "prg_1"}`` for
+        ``referalli``, ``{"projectId": …}`` for ``lucida``): the ``params`` of :meth:`executor_presets`.
 
         ``atlas`` (optional ``atlas_id_app_id``, and ``revoke_atlas_id_grant=True`` for the optional
         grant step), ``forumulate`` (``org_id``), ``cm-standard-v1``
@@ -1896,11 +1904,18 @@ class _Fulfillment(_Resource):
         ):
             if value is not None:
                 body[key] = value
+        if params is not None:
+            body["params"] = dict(params)
         return self._c.request("POST", "/dsar/executors" + _connect_qs(dry_run, verify), body=body)
 
     def executor_presets(self) -> _JSONDict:
         """GET /v1/dsar/executors/presets — the presets, which wait on another platform, and the org canary address."""
         return self._c._get("/dsar/executors/presets")
+
+    def executor_suggestions(self, cbid: Optional[str] = None) -> _JSONDict:
+        """GET /v1/dsar/executors/suggestions — platforms a site's cookie rows and partner links imply
+        that have no connected system yet; every site the key reaches without ``cbid``."""
+        return self._c._get(f"/dsar/executors/suggestions{_qs({'cbid': cbid})}")
 
     def upgrade_executor_preset(
         self,
@@ -1913,6 +1928,7 @@ class _Fulfillment(_Resource):
         revoke_atlas_id_grant: Optional[bool] = None,
         accept_preset: Optional[Sequence[str]] = None,
         dry_run: bool = False,
+        params: Optional[Mapping[str, object]] = None,
     ) -> _JSONDict:
         """POST /v1/dsar/executors/{id}/upgrade-preset — rebuild from the preset's latest version.
 
@@ -1924,6 +1940,8 @@ class _Fulfillment(_Resource):
         body: _JSONDict = {}
         if accept_preset is not None:
             body["acceptPreset"] = list(accept_preset)
+        if params is not None:
+            body["params"] = dict(params)
         for key, value in (("preset", preset), ("presetVersion", preset_version), ("orgId", org_id), ("atlasIdAppId", atlas_id_app_id), ("revokeAtlasIdGrant", revoke_atlas_id_grant)):
             if value is not None:
                 body[key] = value
@@ -2048,6 +2066,11 @@ class _Fulfillment(_Resource):
         """POST /v1/dsar/executors/{id}/test ``{"conformance": true}`` — run the cm-standard-v2
         conformance kit on the org canary subject only; every rule passes, fails or is skipped by name."""
         return self._c.request("POST", f"/dsar/executors/{_e(id)}/test", body={"conformance": True})
+
+    def get_executor_completion_secret(self, id: str) -> _JSONDict:
+        """GET /v1/dsar/executors/{id}/completion-secret — the current completion secret and
+        completionUrl, read again (dsar:write, audited)."""
+        return self._c.request("GET", f"/dsar/executors/{_e(id)}/completion-secret")
 
     def roll_executor_completion_secret(self, id: str) -> _JSONDict:
         """POST /v1/dsar/executors/{id}/completion-secret/roll — a new completion secret, shown
@@ -2254,6 +2277,10 @@ class _RightsIdentity(_Resource):
         """Remove the site's own setting: it inherits the organisation default again."""
         return self._c.request("DELETE", f"/sites/{_e(cbid)}/rights-identity")
 
+    def check(self, cbid: str, token: str) -> _JSONDict:
+        """Check one session token as the rights intake would (verified, reason, jwt, detail, claims). Files nothing."""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/rights-identity/check", body={"token": token})
+
 
 class _DsarSettings(_Resource):
     """A site's rights-request settings: ``graceDays`` (0–30; 7 for a new site, 0 until set for an existing one), how long an erasure or
@@ -2361,7 +2388,7 @@ class _Org(_Resource):
         smtp: Optional[_JSONDict] = None,
     ) -> _JSONDict:
         """Connect your own mail provider (recommended): ``brevo``, ``sendgrid``, ``postmark``,
-        ``resend``, ``ses`` (``ses={"region", "accessKeyId"}``) or ``smtp``
+        ``resend``, ``hermetica``, ``ses`` (``ses={"region", "accessKeyId"}``) or ``smtp``
         (``smtp={"host", "port", "security", "username"}``). Replaces the stored one. It carries
         rights mail only after ``test_mail_provider`` succeeds. ``secret`` is write-only; omit
         it to keep the stored one (same provider only)."""
