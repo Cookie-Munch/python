@@ -516,6 +516,18 @@ class _Sites(_Resource):
         """DELETE /v1/sites/{cbid}/partners/{link_id} — revoke; deliveries stop at once."""
         return self._c.request("DELETE", f"/sites/{_e(cbid)}/partners/{_e(link_id)}")
 
+    def update_partner(
+        self, cbid: str, link_id: str, *, external_id: Optional[str] = None, label: Optional[str] = None, dry_run: bool = False
+    ) -> _JSONDict:
+        """PATCH /v1/sites/{cbid}/partners/{link_id} — fix externalId or label in place, keeping the grant.
+        ``warnings`` names executor keys minted for the old account, to re-mint."""
+        body: _JSONDict = {}
+        if external_id is not None:
+            body["externalId"] = external_id
+        if label is not None:
+            body["label"] = label
+        return self._c.request("PATCH", f"/sites/{_e(cbid)}/partners/{_e(link_id)}{_qs({'dryRun': '1' if dry_run else None})}", body=body)
+
     def get_config(self, cbid: str) -> _JSONDict:
         return self._c._get(f"/sites/{_e(cbid)}/config")
 
@@ -1499,6 +1511,15 @@ class _PartnerLinks(_Resource):
 
     def revoke(self, id: str) -> _JSONDict:
         return self._c.request("DELETE", f"/partner_links/{_e(id)}")
+
+    def update(self, id: str, *, external_id: Optional[str] = None, label: Optional[str] = None, dry_run: bool = False) -> _JSONDict:
+        """PATCH /v1/partner_links/{id} — fix externalId or label in place, keeping the grant."""
+        body: _JSONDict = {}
+        if external_id is not None:
+            body["externalId"] = external_id
+        if label is not None:
+            body["label"] = label
+        return self._c.request("PATCH", f"/partner_links/{_e(id)}{_qs({'dryRun': '1' if dry_run else None})}", body=body)
 
 
 class _Webhooks(_Resource):
