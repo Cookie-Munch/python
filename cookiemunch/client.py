@@ -639,7 +639,7 @@ class _Sites(_Resource):
         ``purposes`` is the purpose in other languages (``{"es": "…", "pt-BR": "…"}``);
         ``purpose`` is the fallback. ``dry_run=True`` stores nothing and answers with the
         would-be list (``declared``) and a ``diff``. ``type`` declares browser storage instead
-        of a cookie: ``"localStorage"``, ``"sessionStorage"`` or ``"indexedDB"``; ``"none"`` declares a
+        of a cookie: ``"localStorage"``, ``"sessionStorage"``, ``"indexedDB"`` or ``"cacheStorage"``; ``"none"`` declares a
         cookieless processor that stores nothing."""
         body: _JSONDict = {"category": category, "purpose": purpose}
         for key, value in (
@@ -746,6 +746,11 @@ class _Sites(_Resource):
         then each preset in ``presets`` (vendor → params) in key order, against one scratch copy.
         Answers ``{dryRun, steps, declared, count, diff}``."""
         return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/plan", body=input or {})
+
+    def apply_cookies(self, cbid: str, input: Optional[_JSONDict] = None) -> _JSONDict:
+        """Apply what ``plan_cookies`` shows, all or nothing (same body, incl. ``handOver``): stored only
+        when every step passes; a refusal stores nothing. Answers ``{applied, steps, declared, count, diff}``."""
+        return self._c.request("POST", f"/sites/{_e(cbid)}/cookies/apply", body=input or {})
 
     def translation(self, cbid: str) -> _JSONDict:
         """The site's own translation account (DeepL or Google): provider, key last four and
