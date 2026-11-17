@@ -2056,6 +2056,10 @@ class _Fulfillment(_Resource):
         """POST /v1/dsar/{id}/tasks/{taskId}/approve — send an erasure that was awaiting approval. Audited."""
         return self._c.request("POST", f"/dsar/{_e(request_id)}/tasks/{_e(task_id)}/approve")
 
+    def retry_task(self, request_id: str, task_id: str) -> _JSONDict:
+        """POST /v1/dsar/{id}/tasks/{taskId}/retry — send a failed task again once its system is fixed. Audited."""
+        return self._c.request("POST", f"/dsar/{_e(request_id)}/tasks/{_e(task_id)}/retry")
+
     def reject_task(self, request_id: str, task_id: str, reason: Optional[str] = None) -> _JSONDict:
         """POST /v1/dsar/{id}/tasks/{taskId}/reject — refuse it: nothing is sent, the task fails with ``reason``."""
         body: _JSONDict = {} if reason is None else {"reason": reason}
