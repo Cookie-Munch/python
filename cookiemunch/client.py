@@ -1388,6 +1388,71 @@ class _Keys(_Resource):
         """Revoke a key by its prefix. Immediate."""
         self._c.request("DELETE", f"/keys/{_e(prefix)}")
 
+    def list_in_org(self, org_id: str) -> List[t.ApiKey]:
+        """Account key (``orgs:keys``): another org's key prefixes. Same answer as ``list()``."""
+        return t.from_list(t.ApiKey, self._c._get(f"/orgs/{_e(org_id)}/keys"))
+
+    def create_in_org(
+        self,
+        org_id: str,
+        *,
+        scopes: List[str],
+        name: Optional[str] = None,
+        cbids: Optional[List[str]] = None,
+        expires_in_days: Optional[int] = None,
+        expires_at: Optional[Union[int, str]] = None,
+        owner: Optional[str] = None,
+        strict_unknown_fields: Optional[bool] = None,
+    ) -> t.ApiKey:
+        """Account key (``orgs:keys``): mint a scoped key in another org of the same account.
+        ``scopes`` is required; the secret is returned once."""
+        body: _JSONDict = {"scopes": list(scopes)}
+        if name is not None:
+            body["name"] = name
+        if cbids is not None:
+            body["cbids"] = list(cbids)
+        if expires_in_days is not None:
+            body["expiresInDays"] = expires_in_days
+        if expires_at is not None:
+            body["expiresAt"] = expires_at
+        if owner is not None:
+            body["owner"] = owner
+        if strict_unknown_fields is not None:
+            body["strictUnknownFields"] = strict_unknown_fields
+        return t.from_dict(t.ApiKey, self._c.request("POST", f"/orgs/{_e(org_id)}/keys", body=body))
+
+    def update_in_org(
+        self,
+        org_id: str,
+        prefix: str,
+        *,
+        name: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        cbids: Optional[List[str]] = None,
+        expires_at: Any = _UNSET,
+        owner: Optional[str] = None,
+        strict_unknown_fields: Optional[bool] = None,
+    ) -> _JSONDict:
+        """Account key (``orgs:keys``): update a key in another org. Same fields as ``update()``."""
+        body: _JSONDict = {}
+        if expires_at is not _UNSET:
+            body["expiresAt"] = expires_at
+        if name is not None:
+            body["name"] = name
+        if scopes is not None:
+            body["scopes"] = list(scopes)
+        if cbids is not None:
+            body["cbids"] = list(cbids)
+        if owner is not None:
+            body["owner"] = owner
+        if strict_unknown_fields is not None:
+            body["strictUnknownFields"] = strict_unknown_fields
+        return self._c.request("PATCH", f"/orgs/{_e(org_id)}/keys/{_e(prefix)}", body=body)
+
+    def revoke_in_org(self, org_id: str, prefix: str) -> None:
+        """Account key (``orgs:keys``): revoke a key in another org. Immediate."""
+        self._c.request("DELETE", f"/orgs/{_e(org_id)}/keys/{_e(prefix)}")
+
     def roll(self, prefix: str) -> t.ApiKey:
         """Rotate a key: a new secret, returned once, with the same scopes, lock and
         expiry. The old one stops working."""
