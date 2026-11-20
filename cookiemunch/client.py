@@ -1389,14 +1389,14 @@ class _Keys(_Resource):
         self._c.request("DELETE", f"/keys/{_e(prefix)}")
 
     def list_in_org(self, org_id: str) -> List[t.ApiKey]:
-        """Account key (``orgs:keys``): another org's key prefixes. Same answer as ``list()``."""
+        """Full-access or account key (``orgs:keys``): another org's key prefixes. Same answer as ``list()``."""
         return t.from_list(t.ApiKey, self._c._get(f"/orgs/{_e(org_id)}/keys"))
 
     def create_in_org(
         self,
         org_id: str,
         *,
-        scopes: List[str],
+        scopes: Optional[List[str]] = None,
         name: Optional[str] = None,
         cbids: Optional[List[str]] = None,
         expires_in_days: Optional[int] = None,
@@ -1404,9 +1404,9 @@ class _Keys(_Resource):
         owner: Optional[str] = None,
         strict_unknown_fields: Optional[bool] = None,
     ) -> t.ApiKey:
-        """Account key (``orgs:keys``): mint a scoped key in another org of the same account.
-        ``scopes`` is required; the secret is returned once."""
-        body: _JSONDict = {"scopes": list(scopes)}
+        """Full-access or account key (``orgs:keys``): mint a key in another org of the same account.
+        ``scopes`` is required with an account key; the secret is returned once."""
+        body: _JSONDict = {} if scopes is None else {"scopes": list(scopes)}
         if name is not None:
             body["name"] = name
         if cbids is not None:
@@ -1433,7 +1433,7 @@ class _Keys(_Resource):
         owner: Optional[str] = None,
         strict_unknown_fields: Optional[bool] = None,
     ) -> _JSONDict:
-        """Account key (``orgs:keys``): update a key in another org. Same fields as ``update()``."""
+        """Full-access or account key (``orgs:keys``): update a key in another org. Same fields as ``update()``."""
         body: _JSONDict = {}
         if expires_at is not _UNSET:
             body["expiresAt"] = expires_at
@@ -1450,7 +1450,7 @@ class _Keys(_Resource):
         return self._c.request("PATCH", f"/orgs/{_e(org_id)}/keys/{_e(prefix)}", body=body)
 
     def revoke_in_org(self, org_id: str, prefix: str) -> None:
-        """Account key (``orgs:keys``): revoke a key in another org. Immediate."""
+        """Full-access or account key (``orgs:keys``): revoke a key in another org. Immediate."""
         self._c.request("DELETE", f"/orgs/{_e(org_id)}/keys/{_e(prefix)}")
 
     def roll(self, prefix: str) -> t.ApiKey:
