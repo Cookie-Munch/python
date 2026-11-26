@@ -481,6 +481,43 @@ class _Sites(_Resource):
             body["keepOldDomain"] = True
         return self._c.request("PATCH", f"/sites/{_e(cbid)}{_qs({'dryRun': '1' if dry_run else None})}", body=body)
 
+    def move(self, cbid: str, to: str, *, from_host: Optional[str] = None, keep_old: Optional[bool] = None, trust_old_days: Optional[int] = None, dry_run: bool = False) -> _JSONDict:
+        """Move the site to a new domain: every stored value naming the old host, rewritten (POST /v1/sites/{cbid}/move).
+        After a refusal, send ``retry.body`` again: what moved is skipped."""
+        body: Dict[str, Any] = {"to": to}
+        if from_host is not None:
+            body["from"] = from_host
+        if keep_old is not None:
+            body["keepOld"] = keep_old
+        if trust_old_days is not None:
+            body["trustOldDays"] = trust_old_days
+        return self._c.request("POST", f"/sites/{_e(cbid)}/move{_qs({'dryRun': '1' if dry_run else None})}", body=body)
+
+    # ---- tenants: sites for your own customers (POST /v1/sites/{cbid}/tenants) ----
+
+    def create_tenant(self, parent_cbid: str, tenant: Mapping[str, Any], *, dry_run: bool = False) -> _JSONDict:
+        """A site for one of your customers (a creator, a shop), the controller for its own visitors. Idempotent by externalId."""
+        return self._c.request("POST", f"/sites/{_e(parent_cbid)}/tenants{_qs({'dryRun': '1' if dry_run else None})}", body=dict(tenant))
+
+    def create_tenants_bulk(self, parent_cbid: str, tenants: List[Mapping[str, Any]], *, dry_run: bool = False) -> _JSONDict:
+        """Up to 100 tenants; send the same list again to resume a run that stopped."""
+        return self._c.request("POST", f"/sites/{_e(parent_cbid)}/tenants/bulk{_qs({'dryRun': '1' if dry_run else None})}", body={"tenants": [dict(t) for t in tenants]})
+
+    def list_tenants(self, parent_cbid: str, *, limit: Optional[int] = None, cursor: Optional[str] = None) -> _JSONDict:
+        """One page of tenants, ordered by externalId: { tenants, nextCursor, total }."""
+        return self._c._get(f"/sites/{_e(parent_cbid)}/tenants{_qs({'limit': str(limit) if limit is not None else None, 'cursor': cursor})}")
+
+    def get_tenant(self, parent_cbid: str, external_id: str) -> _JSONDict:
+        return self._c._get(f"/sites/{_e(parent_cbid)}/tenants/{_e(external_id)}")
+
+    def update_tenant(self, parent_cbid: str, external_id: str, patch: Mapping[str, Any], *, dry_run: bool = False) -> _JSONDict:
+        """Change a tenant's name, path or controller."""
+        return self._c.request("PATCH", f"/sites/{_e(parent_cbid)}/tenants/{_e(external_id)}{_qs({'dryRun': '1' if dry_run else None})}", body=dict(patch))
+
+    def delete_tenant(self, parent_cbid: str, external_id: str, *, dry_run: bool = False) -> Any:
+        """Delete a tenant and everything its site holds. Irreversible: dry_run first."""
+        return self._c.request("DELETE", f"/sites/{_e(parent_cbid)}/tenants/{_e(external_id)}{_qs({'dryRun': '1' if dry_run else None})}")
+
     def delete(self, cbid: str) -> None:
         self._c.request("DELETE", f"/sites/{_e(cbid)}")
 
